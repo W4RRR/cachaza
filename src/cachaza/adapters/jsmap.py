@@ -1,14 +1,12 @@
-"""JSMap Inspector JSON adapter."""
+"""JSMap Inspector endpoint-inventory adapter."""
 
 from __future__ import annotations
 
-import re
+from urllib.parse import urljoin
 
 from ..models import Finding, TargetSpec
+from ..web import is_api_endpoint
 from .common import extract_urls, json_records, url_in_scope, walk_strings
-
-
-SECRET_HINT = re.compile(r"secret|token|api[-_ ]?key|password|credential", re.IGNORECASE)
 
 
 def build_argv(binary: str, input_file: str, output_file: str) -> list[str]:
@@ -19,8 +17,14 @@ def parse_output(text: str, target: TargetSpec) -> list[Finding]:
     findings: list[Finding] = []
     for row in json_records(text):
         flattened = " ".join(walk_strings(row))
-        secret = bool(SECRET_HINT.search(flattened))
-        for value in extract_urls(flattened):
+        candidates = set(extract_urls(flattened))
+        base_url = str(row.get("javascript_url") or "")
+        references = row.get("references") if isinstance(row.get("references"), list) else []
+        for reference in references:
+            candidate = urljoin(base_url, str(reference).strip())
+            if candidate.startswith(("http://", "https://")):
+                candidates.add(candidate)
+        for value in sorted(candidates):
             findings.append(
                 Finding(
                     "js",
@@ -30,11 +34,10 @@ def parse_output(text: str, target: TargetSpec) -> list[Finding]:
                     url_in_scope(value, target),
                     {
                         "javascript_analysis": True,
-                        "secret_candidate": secret,
-                        "confidence": "candidate" if secret else "observed",
-                        "requires_manual_validation": secret,
+                        "endpoint": is_api_endpoint(value),
+                        "related_javascript": value.lower().split("?", 1)[0].endswith(".js"),
+                        "confidence": "observed",
                     },
                 )
             )
     return findings
-

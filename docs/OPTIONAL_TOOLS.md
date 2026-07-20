@@ -64,8 +64,8 @@ Nmap, WHOIS, Smap, Gungnir, Favicorn, theHarvester, dnsenum, Fierce, MassDNS, an
 Focused bundle upstreams:
 
 - [wafw00f](https://github.com/enablesecurity/wafw00f) for broad WAF fingerprints.
-- Nuclei's `http/technologies/waf-detect.yaml` template for a second WAF signal.
-- Nmap `http-waf-detect` and `http-waf-fingerprint` NSE scripts for protocol-level correlation.
+- Nuclei's `http/technologies/waf-detect.yaml` template for a second WAF signal. This is the only Nuclei template Cachaza permits; it is not used for vulnerabilities or endpoints.
+- Nmap `http-waf-detect` and `http-waf-fingerprint` NSE scripts for optional protocol-level correlation. Nmap is not in the default `wafw00f,nuclei` selector.
 - theHarvester for organization contacts, hosts, APIs, and takeover candidates.
 - dnsenum and Fierce for DNS enumeration and AXFR observations.
 - [BlackWidow](https://github.com/1N3/BlackWidow) for authorized crawling and Inject-X candidates. `-blw LEVEL` downloads commit `c9eb24e238c390b03897a04c79e55cb17ec35b8c` into `~/.local/share/cachaza/tools/BlackWidow` when no executable is available.
@@ -88,10 +88,10 @@ cachaza run -d example.com -profile full -active \
 | dnsx | JSONL through `-json`, response fields enabled. |
 | Naabu | File input `-l`, port list `-p`, rate `-rate`. |
 | httpx | JSONL with status, IP, CNAME, CDN, ASN, and technology fields. |
-| Nuclei | JSONL output with template, match, tags, and severity metadata. |
+| Nuclei | One normalized live origin through `-u`, the immutable `-t http/technologies/waf-detect.yaml`, JSONL, rate/bulk/concurrency 1, and zero retries. No tags, severities, workflows, lists, directories, automatic scans, or other templates are accepted. |
 | Katana | List input, FQDN scope, depth 3, known files, and JSONL output. |
-| Cariddi | URL input on stdin with endpoint/secret/plain flags. |
-| JSMap Inspector | Bundled CLI reads JavaScript URL input with `-l`, follows only same-origin maps, caps each response, and writes JSON with `-o`. |
+| Cariddi | URL input on stdin with endpoint/plain output (`-e -plain`), concurrency 1, depth 1, bounded timeout, and maximum-distance 3. Its `-s` secret-hunting mode is deliberately absent. |
+| JSMap Inspector | Bundled CLI reads JavaScript URL input with `-l`, follows only same-origin maps, caps each response, extracts URL/route/API/related-JavaScript references, and writes JSON with `-o`; it does not classify secret-like words. |
 | CSP Stalker | One URL through `-u`; upstream writes under `./results`, so Cachaza sets a stage-specific working directory instead of passing the nonexistent `-o` option. |
 | GAU | Domain input on stdin with `--subs`. |
 | 403jump | Target file through `-f`. |

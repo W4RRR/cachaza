@@ -41,16 +41,15 @@ STAGE_HELP = {
     "dns_enum": "authorized dnsenum/Fierce discovery with explicit zone-transfer warnings",
     "harvester": "authorized theHarvester organization, contact, host, API, and takeover discovery",
     "blackwidow": "authorized BlackWidow crawling and Inject-X candidate checks at the requested depth",
-    "waf": "authorized WAF correlation with wafw00f, Nuclei, and Nmap NSE",
+    "waf": "focused WAF fingerprinting with wafw00f, the single Nuclei waf-detect template, and optional Nmap",
     "shodan": "Karma/Shodan signatures and optional API queries",
     "ports": "authorized Naabu/Nmap discovery plus passive Smap intelligence",
     "http": "authorized HTTPX probing and technology fingerprinting",
     "cloud": "classification against public cloud range lists",
-    "nuclei": "authorized structured Nuclei template observations",
     "bypass": "candidate 403 bypass validation",
     "gau": "passive historical URL and sensitive-name discovery",
     "crawl": "authorized Katana/Cariddi endpoint crawling",
-    "js": "authorized JavaScript analysis with JSMap Inspector",
+    "js": "authorized JavaScript URL and API endpoint inventory with JSMap Inspector",
     "policies": "authorized CSP and favicon analysis",
     "cve": "candidate CVE correlation from observed technologies",
     "active": "authorized httpx, naabu, Caduceus, or nmap adapters",
@@ -60,7 +59,7 @@ STAGE_HELP = {
 PROFILE_HELP = """Profiles:
   passive  Default passive OSINT and historical sources; no direct target probing.
   safe     Passive discovery plus bounded DNS, TLS, port, and HTTP probes; requires -active.
-  full     Safe plus Nuclei, bypass checks, crawling, JS, policies, and CVEs; requires -active."""
+  full     Safe reconnaissance plus GAU, crawling, JavaScript endpoint mapping, and focused WAF fingerprinting; requires -active."""
 
 USEFUL_OPTIONS_HELP = """Useful options:
   -active        authorizes direct probes required by active stages and safe/full profiles
@@ -72,9 +71,17 @@ USEFUL_OPTIONS_HELP = """Useful options:
   -harvester     gathers organization, contact, host, API, and takeover evidence; requires -active
   -blw LEVEL     runs BlackWidow at crawl depth LEVEL with verbose crawling and Inject-X; requires -active
   -dns-enum      runs dnsenum and Fierce and highlights successful AXFR; requires -active
-  -w             correlates WAF findings from wafw00f, Nuclei, and Nmap NSE; requires -active
+  -w             detects WAFs with wafw00f and the single Nuclei waf-detect template; optional Nmap; requires -active
   -format all    writes HTML, JSON, TXT, PDF, and CSV reports
-  -up/-update    updates Cachaza, prints the installed version, and runs doctor"""
+  -up/-update    updates Cachaza, prints the installed version, and runs doctor
+
+Nuclei is restricted to the single WAF detection template.
+Cachaza does not use Nuclei for vulnerability scanning."""
+
+REMOVED_NUCLEI_STAGE_MESSAGE = (
+    "The general Nuclei stage has been removed. Nuclei is only available through "
+    "the WAF stage.\nUse: -stages waf -waf-tools nuclei -active"
+)
 
 
 class CombinedHelpAction(argparse.Action):
@@ -362,10 +369,6 @@ its findings. Direct probes must be explicitly authorized with -active.""",
         action="store_true",
         help="allow ranges above the host limit (requires -active)",
     )
-    run.add_argument("-nuclei-severity", default="info,low,medium,high,critical")
-    run.add_argument("-nuclei-tags", default="waf,cors,login,misconfig,exposure")
-    run.add_argument("-nuclei-rate-limit", type=int, default=2, help="Nuclei requests per second, maximum 2")
-    run.add_argument("-nuclei-concurrency", type=int, default=2, help="Nuclei workers, maximum 2")
     run.add_argument("-max-crawl-urls", type=int, default=50)
     run.add_argument("-jsmap-path", help="explicit JSMap Inspector executable or Python script")
     run.add_argument("-csp-stalker-path", help="explicit CSP Stalker executable or Python script")
@@ -374,11 +377,14 @@ its findings. Direct probes must be explicitly authorized with -active.""",
         "-waf",
         dest="waf",
         action="store_true",
-        help="detect WAFs with wafw00f, Nuclei, and Nmap (requires -active)",
+        help=(
+            "detect and fingerprint WAFs using wafw00f and the single Nuclei "
+            "waf-detect template; optional Nmap correlation (requires -active)"
+        ),
     )
     run.add_argument(
         "-waf-tools",
-        default="wafw00f,nuclei,nmap",
+        default="wafw00f,nuclei",
         help="WAF adapters: wafw00f,nuclei,nmap",
     )
     run.add_argument(
@@ -580,6 +586,9 @@ def _validate_origin_config(config: OriginConfig) -> None:
 def _validate_run_args(args: argparse.Namespace, target: TargetSpec) -> None:
     if target.empty:
         raise ValidationError("provide at least one domain, ASN, organization, or CIDR")
+    requested_stages = _csv(args.stages) if args.stages else profile_stages(args.profile)
+    if "nuclei" in requested_stages:
+        raise ValidationError(REMOVED_NUCLEI_STAGE_MESSAGE)
     if args.origin_auto:
         if not target.domains:
             raise ValidationError("-origin-auto requires at least one -d domain")
@@ -630,10 +639,6 @@ def _validate_run_args(args: argparse.Namespace, target: TargetSpec) -> None:
         raise ValidationError("-shodan-pages must be between 1 and 5")
     if not 1 <= args.shodan_max_queries <= 200:
         raise ValidationError("-shodan-max-queries must be between 1 and 200")
-    if not 1 <= args.nuclei_rate_limit <= 2:
-        raise ValidationError("-nuclei-rate-limit must be between 1 and 2")
-    if not 1 <= args.nuclei_concurrency <= 2:
-        raise ValidationError("-nuclei-concurrency must be between 1 and 2")
     if not 1 <= args.max_crawl_urls <= 5000:
         raise ValidationError("-max-crawl-urls must be between 1 and 5000")
     if not 1 <= args.subdomain_rate_limit <= 2:
@@ -645,7 +650,6 @@ def _validate_run_args(args: argparse.Namespace, target: TargetSpec) -> None:
     if args.blackwidow_depth is not None and not 1 <= args.blackwidow_depth <= 10:
         raise ValidationError("-blw LEVEL must be between 1 and 10")
     _validate_ports(args.ports)
-    requested_stages = _csv(args.stages) if args.stages else profile_stages(args.profile)
     active_without_gate = sorted(set(requested_stages) & ACTIVE_STAGES) if not args.active else []
     if active_without_gate:
         raise ValidationError(
@@ -781,10 +785,6 @@ def command_run(args: argparse.Namespace, console: Console) -> int:
         api_config=args.api_config,
         port_tools=port_tools,
         crawl_tools=crawl_tools,
-        nuclei_severities=args.nuclei_severity,
-        nuclei_tags=args.nuclei_tags,
-        nuclei_rate_limit=args.nuclei_rate_limit,
-        nuclei_concurrency=args.nuclei_concurrency,
         max_crawl_urls=args.max_crawl_urls,
         jsmap_path=args.jsmap_path,
         csp_stalker_path=args.csp_stalker_path,
@@ -833,6 +833,8 @@ def command_plan(args: argparse.Namespace) -> int:
     if target.empty:
         raise ValidationError("provide at least one target")
     stages = _csv(args.stages) if args.stages else profile_stages(args.profile)
+    if "nuclei" in stages:
+        raise ValidationError(REMOVED_NUCLEI_STAGE_MESSAGE)
     skipped = set(_csv(args.skip_stages))
     stages = [name for name in stages if name not in skipped]
     unknown = set(stages) - set(STAGE_HELP)

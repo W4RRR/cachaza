@@ -11,14 +11,14 @@ Cachaza uses a funnel: broad passive collection first, explicit scope decisions 
 | 3 | Passive discovery | Collect CT, provider API, tenant, Subfinder, Shodan, cloud-classification, and archived URL evidence. |
 | 4 | Scope preservation | Evaluate each domain, URL, IP, service, and prefix against explicit inclusions and exclusions. |
 | 5 | Authorized validation | With `-active`, validate names, certificates, ports, and HTTP services under rate and host-count limits. Automatic Direct-origin validation additionally requires `-authorized`. |
-| 6 | Security enrichment | In the full profile, run template observations, 403 checks, crawling, JavaScript/policy analysis, favicon fingerprinting, and CVE correlation. |
+| 6 | Endpoint and WAF mapping | In the full profile, combine GAU history, bounded crawling, JavaScript endpoint extraction, and focused WAF identification. |
 | 7 | Reporting | Render the single finding stream into HTML, JSON, TXT, PDF, CSV, artifact lists, checkpoints, and a manifest. |
 
 ## Profile boundaries
 
 - `passive` performs no direct application or network scan. DNS and public API lookups can still contact third-party infrastructure.
 - `safe` requires `-active` and adds bounded DNS, certificate, port, and HTTP validation.
-- `full` requires `-active` and adds security templates, bypass checks, crawling, JavaScript/policy analysis, and CVE correlation.
+- `full` requires `-active` and adds historical URLs, bounded endpoint crawling, JavaScript endpoint extraction, and focused WAF identification. Explicit `bypass`, `policies`, and `cve` stages remain outside this profile.
 - Explicit active stages selected through `-stages` also require `-active`.
 
 ## Scope invariants
@@ -37,7 +37,17 @@ Each observation contains:
 stage, source, kind, value, in_scope, metadata, observed_at
 ```
 
-The tuple `(source, kind, value)` is deduplicated within a workspace. Source-specific context is preserved in metadata. `rest/findings.jsonl` is canonical; text lists are derived views.
+The tuple `(source, kind, value)` is normally deduplicated within a workspace. WAF evidence also includes its target origin in the identity so the same vendor detected on two hosts is not collapsed. Source-specific context is preserved in metadata. `rest/findings.jsonl` is canonical; text lists are derived views.
+
+## Endpoint and WAF boundary
+
+Endpoint inventory is built from GAU, Katana, endpoint-only Cariddi, JavaScript references, and passive URL sources. GAU observations retain their historical provenance and are not evidence that an origin is live. Katana and Cariddi remain within authorized FQDN scope; Cariddi uses `-e -plain` and does not enable `-s` secret hunting. JavaScript analysis records related URLs, routes, API endpoints, and Swagger/OpenAPI/GraphQL references without treating secret-like words as findings.
+
+Nuclei is not an endpoint or vulnerability scanner in Cachaza. The general stage, tagged templates, severity selection, automatic scans, workflows, template directories, and URL lists have been removed. The only permitted invocation uses the immutable `http/technologies/waf-detect.yaml` template with `-rl 1 -bulk-size 1 -c 1 -retries 0`. A second validation layer in the network policy rejects any other Nuclei command.
+
+WAF targets come only from confirmed live HTTP URL findings and are normalized to `scheme + hostname + effective port`. Paths, queries, fragments, credentials, and default ports are removed. A non-standard port survives only when httpx or a crawler confirms a live HTTP(S) URL there. DNS names, Naabu/Nmap services, and unverified historical URLs never become WAF targets. When the WAF stage runs without prior live HTTP evidence, it tries only `https://ROOT_DOMAIN`.
+
+The default WAF tools are `wafw00f,nuclei`. Nmap correlation remains available only when explicitly selected. Reports retain vendor, source, confidence, and target origin, and do not interpret empty or negative output as a detection.
 
 ## Failure and resume model
 

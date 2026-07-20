@@ -9,10 +9,16 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from .web import normalize_http_origin
+
 
 MAX_REQUESTS_PER_SECOND = 2
 MAX_CONCURRENCY = 2
 MIN_REQUEST_INTERVAL = 1.0 / MAX_REQUESTS_PER_SECOND
+
+
+class NetworkPolicyError(ValueError):
+    """Raised when an external command violates a hard network safety rule."""
 
 
 def capped(value: int | float, maximum: int | float = MAX_CONCURRENCY):
@@ -104,6 +110,103 @@ def _cap_flag(
         argv.extend([add_as, str(maximum)])
 
 
+def _option_values(argv: list[str], names: set[str]) -> list[str]:
+    values: list[str] = []
+    for index, item in enumerate(argv):
+        if item.casefold() not in names:
+            continue
+        if index + 1 >= len(argv):
+            raise NetworkPolicyError(f"Nuclei option {item} requires a value")
+        values.append(argv[index + 1])
+    return values
+
+
+def _validate_nuclei_waf_command(argv: list[str]) -> None:
+    from .adapters.waf import NUCLEI_WAF_TEMPLATE
+
+    forbidden = {
+        "tags",
+        "severity",
+        "as",
+        "automatic-scan",
+        "turl",
+        "template-url",
+        "template",
+        "templates",
+        "template-directory",
+        "td",
+        "nt",
+        "new-templates",
+        "workflows",
+        "w",
+        "l",
+        "list",
+    }
+    present_forbidden = sorted(
+        {
+            item
+            for item in argv[1:]
+            if item.startswith("-") and item.lstrip("-").casefold() in forbidden
+        }
+    )
+    if present_forbidden:
+        raise NetworkPolicyError(
+            "unsafe Nuclei command rejected; general scanning options are forbidden: "
+            + ", ".join(present_forbidden)
+        )
+    value_options = {
+        "-u",
+        "-t",
+        "-rl",
+        "-rate-limit",
+        "-bs",
+        "-bulk-size",
+        "-c",
+        "-concurrency",
+        "-timeout",
+        "-retries",
+    }
+    switch_options = {"-jsonl", "-no-stdin", "-omit-raw", "-no-color", "-silent"}
+    index = 1
+    while index < len(argv):
+        option = argv[index]
+        if option in value_options:
+            if index + 1 >= len(argv):
+                raise NetworkPolicyError(f"Nuclei option {option} requires a value")
+            index += 2
+            continue
+        if option in switch_options:
+            index += 1
+            continue
+        raise NetworkPolicyError(
+            "unsafe Nuclei command rejected; unsupported option or positional target: "
+            + option
+        )
+    templates = _option_values(argv, {"-t"})
+    if templates != [NUCLEI_WAF_TEMPLATE]:
+        raise NetworkPolicyError(
+            "unsafe Nuclei command rejected; the only permitted template is "
+            f"-t {NUCLEI_WAF_TEMPLATE}"
+        )
+    targets = _option_values(argv, {"-u"})
+    if len(targets) != 1 or normalize_http_origin(targets[0]) != targets[0]:
+        raise NetworkPolicyError(
+            "unsafe Nuclei command rejected; exactly one normalized HTTP origin is required"
+        )
+    retries = _option_values(argv, {"-retries", "--retries"})
+    if retries != ["0"]:
+        raise NetworkPolicyError(
+            "unsafe Nuclei command rejected; -retries 0 is mandatory"
+        )
+    required_switches = {"-jsonl", "-no-stdin", "-omit-raw", "-no-color"}
+    missing = sorted(required_switches - set(argv))
+    if missing:
+        raise NetworkPolicyError(
+            "unsafe Nuclei command rejected; required WAF safety options are missing: "
+            + ", ".join(missing)
+        )
+
+
 def enforce_tool_limits(argv: list[str]) -> list[str]:
     """Cap supported third-party network tools even when a call site forgets."""
     clean = [str(part) for part in argv]
@@ -118,18 +221,10 @@ def enforce_tool_limits(argv: list[str]) -> list[str]:
         _cap_flag(clean, ("-rl", "-rate-limit"), maximum=rate, add_as="-rl")
         _cap_flag(clean, ("-t", "-threads"), maximum=workers, add_as="-t")
     elif tool == "nuclei":
-        _cap_flag(clean, ("-rl", "-rate-limit"), maximum=rate, add_as="-rl")
-        for aliases, preferred in (
-            (("-bs", "-bulk-size"), "-bulk-size"),
-            (("-c", "-concurrency"), "-c"),
-            (("-hbs", "-headless-bulk-size"), "-hbs"),
-            (("-headc", "-headless-concurrency"), "-headc"),
-            (("-jsc", "-js-concurrency"), "-jsc"),
-            (("-pc", "-payload-concurrency"), "-pc"),
-            (("-prc", "-probe-concurrency"), "-prc"),
-            (("-tlc", "-template-loading-concurrency"), "-tlc"),
-        ):
-            _cap_flag(clean, aliases, maximum=workers, add_as=preferred)
+        _validate_nuclei_waf_command(clean)
+        _cap_flag(clean, ("-rl", "-rate-limit"), maximum=1, add_as="-rl")
+        _cap_flag(clean, ("-bs", "-bulk-size"), maximum=1, add_as="-bulk-size")
+        _cap_flag(clean, ("-c", "-concurrency"), maximum=1, add_as="-c")
     elif tool == "katana":
         _cap_flag(clean, ("-rl", "-rate-limit"), maximum=rate, add_as="-rate-limit")
         _cap_flag(clean, ("-c", "-concurrency"), maximum=workers, add_as="-concurrency")

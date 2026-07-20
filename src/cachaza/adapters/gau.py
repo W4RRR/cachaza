@@ -28,8 +28,9 @@ def parse_output(text: str, target: TargetSpec) -> list[Finding]:
     for value in sorted({line.strip() for line in text.splitlines() if line.strip()}):
         if not value.startswith(("http://", "https://")):
             continue
-        sensitive = bool(SENSITIVE.search(urlsplit(value).path))
-        endpoint = bool(API_HINT.search(urlsplit(value).path))
+        parsed = urlsplit(value)
+        sensitive = bool(SENSITIVE.search(parsed.path))
+        endpoint = bool(API_HINT.search(parsed.path))
         findings.append(
             Finding(
                 "gau",
@@ -39,6 +40,9 @@ def parse_output(text: str, target: TargetSpec) -> list[Finding]:
                 url_in_scope(value, target),
                 {
                     "historical": True,
+                    "historical_source": "gau",
+                    "host": parsed.hostname,
+                    "path": parsed.path or "/",
                     "sensitive_candidate": sensitive,
                     "confidence": "candidate" if sensitive else "observed",
                     "requires_manual_validation": sensitive,

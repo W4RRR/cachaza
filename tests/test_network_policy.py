@@ -2,18 +2,74 @@ from __future__ import annotations
 
 import unittest
 
-from cachaza.network_policy import constrained_environment, enforce_tool_limits
+from cachaza.adapters.waf import NUCLEI_WAF_TEMPLATE, build_nuclei_waf_argv
+from cachaza.network_policy import (
+    NetworkPolicyError,
+    constrained_environment,
+    enforce_tool_limits,
+)
 
 
 class NetworkPolicyTests(unittest.TestCase):
-    def test_nuclei_limits_are_added_or_capped(self) -> None:
-        argv = enforce_tool_limits(
-            ["nuclei", "-u", "https://example.com", "-rl", "50", "-c", "25"]
+    def test_nuclei_waf_limits_are_forced_to_one(self) -> None:
+        source = build_nuclei_waf_argv(
+            "nuclei", "https://example.com", timeout=20, silent=True
         )
-        self.assertEqual(argv[argv.index("-rl") + 1], "2")
-        self.assertEqual(argv[argv.index("-c") + 1], "2")
-        for option in ("-bulk-size", "-hbs", "-headc", "-jsc", "-pc", "-prc", "-tlc"):
-            self.assertEqual(argv[argv.index(option) + 1], "2")
+        self.assertIn("-silent", source)
+        source[source.index("-rl") + 1] = "50"
+        source[source.index("-bulk-size") + 1] = "25"
+        source[source.index("-c") + 1] = "25"
+        argv = enforce_tool_limits(source)
+        self.assertEqual(argv[argv.index("-rl") + 1], "1")
+        self.assertEqual(argv[argv.index("-bulk-size") + 1], "1")
+        self.assertEqual(argv[argv.index("-c") + 1], "1")
+
+    def test_general_nuclei_commands_are_rejected(self) -> None:
+        with self.assertRaisesRegex(NetworkPolicyError, "general scanning options"):
+            enforce_tool_limits(
+                ["nuclei", "-u", "https://example.com", "-tags", "cve,misconfig"]
+            )
+        with self.assertRaisesRegex(NetworkPolicyError, "only permitted template"):
+            enforce_tool_limits(
+                ["nuclei", "-u", "https://example.com", "-t", "cves/"]
+            )
+
+    def test_nuclei_rejects_template_aliases_directories_lists_and_extra_targets(self) -> None:
+        safe = build_nuclei_waf_argv(
+            "nuclei", "https://example.com", timeout=20, silent=True
+        )
+        unsafe_variants = (
+            safe + ["-templates", NUCLEI_WAF_TEMPLATE],
+            safe + ["-template-directory", "http/"],
+            safe + ["-l", "urls.txt"],
+            safe + ["https://api.example.com"],
+        )
+        for argv in unsafe_variants:
+            with self.subTest(argv=argv):
+                with self.assertRaises(NetworkPolicyError):
+                    enforce_tool_limits(argv)
+
+    def test_only_exact_waf_template_and_origin_are_accepted(self) -> None:
+        argv = build_nuclei_waf_argv(
+            "nuclei", "https://example.com/login", timeout=20, silent=False
+        )
+        self.assertEqual(argv[argv.index("-u") + 1], "https://example.com")
+        self.assertEqual(argv[argv.index("-t") + 1], NUCLEI_WAF_TEMPLATE)
+        self.assertEqual(argv.count("-t"), 1)
+        for forbidden in (
+            "-tags",
+            "-severity",
+            "-as",
+            "-l",
+            "-workflows",
+            "-automatic-scan",
+        ):
+            self.assertNotIn(forbidden, argv)
+        self.assertEqual(argv[argv.index("-rl") + 1], "1")
+        self.assertEqual(argv[argv.index("-bulk-size") + 1], "1")
+        self.assertEqual(argv[argv.index("-c") + 1], "1")
+        self.assertEqual(argv[argv.index("-retries") + 1], "0")
+        enforce_tool_limits(argv)
 
     def test_active_tool_limits_cannot_exceed_two(self) -> None:
         cases = (

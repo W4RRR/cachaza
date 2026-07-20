@@ -160,6 +160,8 @@ def render_html(data: dict[str, Any]) -> str:
         suffix = f" (+{len(values) - limit} more on reports)" if len(values) > limit else ""
         if key == "zone_transfer_allowed":
             rendered = "ALLOWED: " + ", ".join(shown) if shown else "Not observed"
+        elif key == "wafs" and not shown:
+            rendered = "No evidence observed"
         else:
             rendered = ", ".join(shown) if shown else "-"
         key_rows.append([label, str(len(values)), rendered + suffix])

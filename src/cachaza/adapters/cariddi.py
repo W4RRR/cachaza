@@ -1,18 +1,26 @@
-"""Cariddi endpoint/secret candidate adapter."""
+"""Cariddi endpoint-only discovery adapter."""
 
 from __future__ import annotations
 
-import re
-
 from ..models import Finding, TargetSpec
+from ..web import is_api_endpoint
 from .common import clean_text, extract_urls, url_in_scope
 
 
-SECRET_HINT = re.compile(r"secret|token|api[-_ ]?key|password|credential", re.IGNORECASE)
-
-
-def build_argv(binary: str) -> list[str]:
-    return [binary, "-e", "-s", "-plain"]
+def build_argv(binary: str, *, timeout: int) -> list[str]:
+    return [
+        binary,
+        "-e",
+        "-plain",
+        "-c",
+        "1",
+        "-d",
+        "1",
+        "-t",
+        str(timeout),
+        "-md",
+        "3",
+    ]
 
 
 def parse_output(text: str, target: TargetSpec) -> list[Finding]:
@@ -20,7 +28,6 @@ def parse_output(text: str, target: TargetSpec) -> list[Finding]:
     for line in text.splitlines():
         cleaned = clean_text(line, 4_000)
         for value in extract_urls(cleaned):
-            secret = bool(SECRET_HINT.search(cleaned))
             findings.append(
                 Finding(
                     "crawl",
@@ -29,12 +36,11 @@ def parse_output(text: str, target: TargetSpec) -> list[Finding]:
                     value,
                     url_in_scope(value, target),
                     {
-                        "endpoint": True,
-                        "secret_candidate": secret,
-                        "confidence": "candidate" if secret else "observed",
-                        "raw_summary": cleaned if secret else None,
+                        "endpoint": is_api_endpoint(value),
+                        "endpoint_discovery": True,
+                        "crawler": True,
+                        "confidence": "observed",
                     },
                 )
             )
     return findings
-

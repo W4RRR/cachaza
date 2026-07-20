@@ -65,13 +65,13 @@ class ManagedToolTests(unittest.TestCase):
         self.assertEqual(argv, ["/home/kali/.local/bin/csp-stalker", "-u", "https://example.com"])
         self.assertNotIn("-o", argv)
 
-    def test_builtin_jsmap_analyzer_extracts_urls_and_secret_hints(self) -> None:
+    def test_builtin_jsmap_analyzer_extracts_endpoint_references_without_secrets(self) -> None:
         script = b"console.log('ok');\n//# sourceMappingURL=app.js.map\n"
         source_map = json.dumps(
             {
                 "sources": ["webpack:///src/app.js"],
                 "sourcesContent": [
-                    "const api_key = value; fetch('https://api.example.com/v1');"
+                    "const token = value; fetch('https://api.example.com/v1'); fetch('/graphql');"
                 ],
             }
         ).encode()
@@ -79,7 +79,8 @@ class ManagedToolTests(unittest.TestCase):
             record = jsmap_cli.analyze_url("https://example.com/assets/app.js")
         self.assertEqual(record["sourcemap_url"], "https://example.com/assets/app.js.map")
         self.assertEqual(record["urls"], ["https://api.example.com/v1"])
-        self.assertEqual(record["secret_hints"][0]["kind"], "api_key")
+        self.assertIn("/graphql", record["references"])
+        self.assertNotIn("secret_hints", record)
 
 
 if __name__ == "__main__":

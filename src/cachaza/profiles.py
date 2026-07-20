@@ -65,16 +65,16 @@ PROFILES: dict[str, ProfileSpec] = {
             "ports",
             "http",
             "cloud",
-            "nuclei",
-            "bypass",
             "gau",
             "crawl",
             "js",
-            "policies",
-            "cve",
+            "waf",
         ),
         requires_active=True,
-        description="the safe funnel plus authorized validation, crawling, policy, and CVE correlation",
+        description=(
+            "safe reconnaissance plus historical URL discovery, endpoint crawling, "
+            "JavaScript endpoint mapping, and focused WAF fingerprinting"
+        ),
     ),
 }
 
@@ -86,7 +86,6 @@ ACTIVE_STAGES = {
     "dns",
     "ports",
     "http",
-    "nuclei",
     "bypass",
     "crawl",
     "js",

@@ -32,9 +32,24 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(code, 0)
         data = json.loads(output.getvalue())
         self.assertEqual(data["profile"], "full")
-        self.assertIn("nuclei", [item["name"] for item in data["stages"]])
+        stages = [item["name"] for item in data["stages"]]
+        self.assertNotIn("nuclei", stages)
+        for required in ("gau", "crawl", "js", "waf"):
+            self.assertIn(required, stages)
+        self.assertLess(stages.index("http"), stages.index("waf"))
+
+    def test_removed_general_nuclei_stage_returns_actionable_error(self) -> None:
+        for command in ("run", "plan"):
+            errors = io.StringIO()
+            args = [command, "-d", "example.com", "-stages", "nuclei", "-active"]
+            if command == "run":
+                args.append("-dry-run")
+            with contextlib.redirect_stderr(errors):
+                code = main(args)
+            self.assertEqual(code, 2)
+            self.assertIn("general Nuclei stage has been removed", errors.getvalue())
+            self.assertIn("-stages waf -waf-tools nuclei -active", errors.getvalue())
 
 
 if __name__ == "__main__":
     unittest.main()
-

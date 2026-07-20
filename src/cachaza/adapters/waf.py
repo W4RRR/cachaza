@@ -7,9 +7,11 @@ import re
 import xml.etree.ElementTree as ET
 
 from ..models import Finding, TargetSpec
+from ..web import normalize_http_origin
 from .common import clean_text, json_records, url_in_scope
 
 
+NUCLEI_WAF_TEMPLATE = "http/technologies/waf-detect.yaml"
 UNKNOWN_WAF = "WAF detected (vendor unknown)"
 NEGATIVE = re.compile(
     r"no waf|not behind (?:a )?waf|does not seem to be behind|could not detect|"
@@ -21,6 +23,50 @@ VENDOR_PATTERNS = (
     re.compile(r"is protected by\s+(?P<vendor>.+?)(?:\.|$)", re.IGNORECASE),
     re.compile(r"waf(?: detection| detected| product)?\s*[:=]\s*(?P<vendor>[^\r\n,;]+)", re.IGNORECASE),
 )
+NUCLEI_VENDOR_NAMES = {
+    "akamai": "Akamai",
+    "aws-waf": "AWS WAF",
+    "cloudflare": "Cloudflare",
+    "f5-big-ip": "F5 BIG-IP",
+    "imperva": "Imperva",
+}
+
+
+def build_nuclei_waf_argv(
+    binary: str,
+    url: str,
+    *,
+    timeout: int,
+    silent: bool,
+) -> list[str]:
+    """Build the only Nuclei invocation Cachaza permits."""
+    origin = normalize_http_origin(url)
+    if not origin:
+        raise ValueError(f"invalid HTTP origin for Nuclei WAF detection: {url!r}")
+    argv = [
+        binary,
+        "-u",
+        origin,
+        "-t",
+        NUCLEI_WAF_TEMPLATE,
+        "-jsonl",
+        "-rl",
+        "1",
+        "-bulk-size",
+        "1",
+        "-c",
+        "1",
+        "-timeout",
+        str(timeout),
+        "-retries",
+        "0",
+        "-no-stdin",
+        "-omit-raw",
+        "-no-color",
+    ]
+    if silent:
+        argv.append("-silent")
+    return argv
 
 
 def _vendor(text: str) -> str | None:
@@ -48,6 +94,8 @@ def _finding(source: str, value: str, url: str, target: TargetSpec, raw: str) ->
         url_in_scope(url, target),
         {
             "target": url,
+            "vendor": value,
+            "source": source,
             "confidence": "detected" if value != UNKNOWN_WAF else "candidate",
             "requires_manual_validation": value == UNKNOWN_WAF,
             "evidence": clean_text(raw, 1_000),
@@ -90,28 +138,29 @@ def parse_wafw00f(text: str, url: str, target: TargetSpec) -> list[Finding]:
 def parse_nuclei(text: str, url: str, target: TargetSpec) -> list[Finding]:
     findings: list[Finding] = []
     for row in json_records(text):
+        template_id = clean_text(
+            row.get("template-id") or row.get("template_id"), 200
+        )
+        if template_id != "waf-detect":
+            continue
+        matcher = clean_text(row.get("matcher-name") or row.get("matcher_name"), 200)
+        if not matcher or NEGATIVE.search(matcher):
+            continue
+        canonical_matcher = matcher.casefold().replace("_", "-").strip(" -")
+        value = NUCLEI_VENDOR_NAMES.get(canonical_matcher)
+        if not value:
+            value = " ".join(part.title() for part in canonical_matcher.split("-") if part)
+        if not value:
+            continue
         info = row.get("info") if isinstance(row.get("info"), dict) else {}
         evidence = " ".join(
-            str(value)
-            for value in (
-                info.get("name"),
-                row.get("matcher-name") or row.get("matcher_name"),
-                row.get("extracted-results") or row.get("extracted_results"),
-            )
-            if value
+            str(item)
+            for item in (info.get("name"), matcher)
+            if item
         )
-        template_id = str(row.get("template-id") or row.get("template_id") or "")
-        matcher = clean_text(row.get("matcher-name") or row.get("matcher_name"), 200)
-        if template_id.endswith("waf-detect") and matcher:
-            value = " ".join(part.upper() if part.lower() in {"aws", "f5"} else part.title() for part in matcher.split("-"))
-        else:
-            value = _vendor(evidence)
-        if not value and template_id.endswith("waf-detect"):
-            value = UNKNOWN_WAF
-        if value:
-            finding = _finding("nuclei/waf-detect", value, url, target, evidence)
-            finding.metadata["template_id"] = template_id
-            findings.append(finding)
+        finding = _finding("nuclei/waf-detect", value, url, target, evidence)
+        finding.metadata["template_id"] = template_id
+        findings.append(finding)
     return findings
 
 

@@ -13,6 +13,18 @@ cachaza run -d example.com -active -authorized \
 
 Existing general active-scope behavior remains unchanged. The authorization exception is isolated to the Origin stage: it may contact only automatically generated, correlated, public, non-CDN `origin_candidate` addresses that pass the configured score and central request-budget gates.
 
+## WAF-only Nuclei transition
+
+The executable `nuclei` stage and the options `-nuclei-tags`, `-nuclei-severity`, `-nuclei-rate-limit`, and `-nuclei-concurrency` have been removed. Cachaza no longer runs tagged, severity-selected, automatic, workflow, CVE, exposure, login, CORS, misconfiguration, or general vulnerability templates.
+
+Use the WAF stage explicitly when needed:
+
+```bash
+cachaza run -d example.com -stages waf -waf-tools nuclei -active -o example-waf
+```
+
+This runs only `http/technologies/waf-detect.yaml` against normalized live HTTP origins. `-stages nuclei` fails with a migration message instead of being redirected. The `full` profile now uses `http`, `gau`, `crawl`, `js`, then `waf`; explicit `bypass`, `policies`, and `cve` stages are not selected automatically.
+
 ## What changed
 
 - Phase functions are Python `stage_*` methods and typed adapters.
@@ -39,11 +51,11 @@ Existing general active-scope behavior remains unchanged. The authorization exce
 | DNS validation | `stage_dns` and `adapters/dnsx.py` |
 | Passive/active ports | `stage_ports` and Smap/Naabu/Nmap adapters |
 | HTTP probing | `stage_http` with normalized httpx evidence |
-| Template checks | `stage_nuclei` and `adapters/nuclei.py` |
+| WAF identification | `stage_waf` and `adapters/waf.py`; Nuclei is restricted to `http/technologies/waf-detect.yaml` |
 | HTTP 403 checks | `stage_bypass` and `adapters/jump403.py` |
 | Historical/sensitive URLs | `stage_gau` and `adapters/gau.py` |
-| Endpoint crawling | `stage_crawl` and Katana/Cariddi adapters |
-| JavaScript analysis | `stage_js` and `adapters/jsmap.py` |
+| Endpoint crawling | `stage_crawl` and Katana/endpoint-only Cariddi adapters |
+| JavaScript endpoint analysis | `stage_js` and `adapters/jsmap.py`; secret-like words are not promoted to findings |
 | CSP/favicon analysis | `stage_policies` and CSP Stalker/Favicorn adapters |
 | CVE lookup | `stage_cve` and `adapters/vulnx.py` |
 | Provider enrichment | `stage_api`, native Censys/IntelX/urlscan sources, provider diagnostics, and temporary Subfinder/theHarvester configuration |

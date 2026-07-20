@@ -17,7 +17,7 @@ class ReportingSecurityTests(unittest.TestCase):
         workspace = RunWorkspace(root)
         workspace.add(
             Finding(
-                "nuclei",
+                "blackwidow",
                 "=cmd|' /C calc'!A0",
                 "security_finding",
                 "<script>alert(1)</script>",
@@ -45,4 +45,3 @@ class ReportingSecurityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

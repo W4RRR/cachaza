@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..models import Finding, TargetSpec
+from ..web import is_api_endpoint
 from .common import json_records, url_in_scope
 
 
@@ -42,6 +43,8 @@ def parse_output(text: str, target: TargetSpec) -> list[Finding]:
         value = str(request.get("endpoint") or request.get("url") or row.get("url") or "").strip()
         if not value.startswith(("http://", "https://")):
             continue
+        response = row.get("response") if isinstance(row.get("response"), dict) else {}
+        status_code = response.get("status_code")
         findings.append(
             Finding(
                 "crawl",
@@ -51,10 +54,10 @@ def parse_output(text: str, target: TargetSpec) -> list[Finding]:
                 url_in_scope(value, target),
                 {
                     "method": request.get("method"),
-                    "status_code": row.get("response", {}).get("status_code")
-                    if isinstance(row.get("response"), dict)
-                    else None,
+                    "status_code": status_code,
                     "crawler": True,
+                    "http_live": str(status_code).startswith(("2", "3")),
+                    "endpoint": is_api_endpoint(value),
                 },
             )
         )

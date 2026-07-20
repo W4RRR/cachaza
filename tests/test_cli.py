@@ -172,7 +172,10 @@ class CliTests(unittest.TestCase):
         self.assertIn("cachaza run -h", help_text)
         self.assertIn("passive  Default passive OSINT", help_text)
         self.assertIn("safe     Passive discovery plus bounded DNS", help_text)
-        self.assertIn("full     Safe plus Nuclei", help_text)
+        self.assertIn("full     Safe reconnaissance plus GAU", help_text)
+        self.assertIn("Cachaza does not use Nuclei for vulnerability scanning", help_text)
+        self.assertNotIn("-nuclei-tags", help_text)
+        self.assertNotIn("-nuclei-severity", help_text)
         for option in (
             "-active",
             "-whois",
@@ -381,7 +384,7 @@ class CliTests(unittest.TestCase):
             self.assertNotIn("\x1b[", (plain / "report.txt").read_text(encoding="utf-8"))
 
     def test_network_limits_above_two_are_rejected(self) -> None:
-        for option in ("-jobs", "-rate-limit", "-nuclei-rate-limit", "-nuclei-concurrency"):
+        for option in ("-jobs", "-rate-limit"):
             errors = io.StringIO()
             with contextlib.redirect_stderr(errors):
                 code = main(["run", "-d", "example.com", "-dry-run", option, "3"])

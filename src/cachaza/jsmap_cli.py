@@ -19,8 +19,9 @@ SOURCE_MAP_RE = re.compile(
     re.IGNORECASE,
 )
 URL_RE = re.compile(r"https?://[^\s\"'<>\\)\]]+", re.IGNORECASE)
-SECRET_HINT_RE = re.compile(
-    r"(?i)(?:api[-_]?key|client[-_]?secret|access[-_]?token|password|credential)"
+REFERENCE_RE = re.compile(
+    r"[\"']((?:https?://|/|\.\.?/)[^\"'\s<>]{1,2000})[\"']",
+    re.IGNORECASE,
 )
 MAX_INPUTS = 200
 
@@ -110,21 +111,18 @@ def analyze_url(url: str, *, timeout: int = 20, max_bytes: int = 5_000_000) -> d
         source_names = sources if isinstance(sources, list) else []
         source_contents = contents if isinstance(contents, list) else []
         urls: set[str] = set()
-        secret_hints: list[dict[str, str]] = []
-        for index, content in enumerate(source_contents[:10_000]):
+        references: set[str] = set()
+        for content in source_contents[:10_000]:
             if not isinstance(content, str):
                 continue
             urls.update(URL_RE.findall(content))
-            match = SECRET_HINT_RE.search(content)
-            if match and len(secret_hints) < 100:
-                source_name = source_names[index] if index < len(source_names) else f"source-{index}"
-                secret_hints.append({"kind": match.group(0), "source": str(source_name)[:1_000]})
+            references.update(REFERENCE_RE.findall(content))
         record.update(
             {
                 "source_count": len(source_names),
                 "sources": [str(value)[:2_000] for value in source_names[:10_000]],
                 "urls": sorted(urls)[:10_000],
-                "secret_hints": secret_hints,
+                "references": sorted(references)[:10_000],
             }
         )
     except (OSError, ValueError, json.JSONDecodeError, urllib.error.URLError) as exc:

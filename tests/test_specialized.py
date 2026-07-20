@@ -40,8 +40,8 @@ class SpecializedAdapterTests(unittest.TestCase):
     def test_waf_regressions_do_not_promote_test_url_to_vendor(self) -> None:
         line = json.dumps(
             {
-                "template-id": "dns-waf-detect",
-                "info": {"name": "DNS WAF Detection"},
+                "template-id": "waf-detect",
+                "info": {"name": "HTTP WAF Detection"},
                 "matcher-name": "cloudflare",
             }
         )
@@ -192,10 +192,10 @@ class SpecializedCliTests(unittest.TestCase):
             self.assertIn("wafw00f https://example.com -a", commands)
             self.assertIn("http/technologies/waf-detect.yaml", commands)
             self.assertIn(
-                "-rl 1 -bulk-size 1 -c 1 -timeout 20 -retries 1 -no-stdin -omit-raw",
+                "-rl 1 -bulk-size 1 -c 1 -timeout 20 -retries 0 -no-stdin -omit-raw",
                 commands,
             )
-            self.assertIn("http-waf-detect,http-waf-fingerprint", commands)
+            self.assertNotIn("http-waf-detect,http-waf-fingerprint", commands)
 
     def test_help_mentions_update_and_specialized_shortcuts(self) -> None:
         output = io.StringIO()

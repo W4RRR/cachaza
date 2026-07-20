@@ -33,6 +33,9 @@ class DiscoveryAdapterTests(unittest.TestCase):
         self.assertTrue(sensitive.in_scope)
         self.assertTrue(sensitive.metadata["sensitive_candidate"])
         self.assertEqual(sensitive.metadata["confidence"], "candidate")
+        self.assertEqual(sensitive.metadata["historical_source"], "gau")
+        self.assertEqual(sensitive.metadata["host"], "api.example.com")
+        self.assertEqual(sensitive.metadata["path"], "/.env")
 
     def test_smap_normalizes_passive_service(self) -> None:
         self.assertEqual(smap.build_argv("smap"), ["smap", "-iL", "-"])

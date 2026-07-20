@@ -57,6 +57,7 @@ from .sources import (
     urlscan_search,
 )
 from .workspace import RunWorkspace
+from .web import select_live_http_origins
 from .adapters import (
     blackwidow,
     cariddi,
@@ -70,7 +71,6 @@ from .adapters import (
     jsmap,
     jump403,
     katana,
-    nuclei,
     smap,
     vulnx,
     waf,
@@ -109,14 +109,10 @@ class RunOptions:
     api_config: str | None = None
     port_tools: list[str] = field(default_factory=lambda: ["naabu", "smap"])
     crawl_tools: list[str] = field(default_factory=lambda: ["auto"])
-    nuclei_severities: str = "info,low,medium,high,critical"
-    nuclei_tags: str = "waf,cors,login,misconfig,exposure"
-    nuclei_rate_limit: int = MAX_REQUESTS_PER_SECOND
-    nuclei_concurrency: int = MAX_CONCURRENCY
     max_crawl_urls: int = 50
     jsmap_path: str | None = None
     csp_stalker_path: str | None = None
-    waf_tools: list[str] = field(default_factory=lambda: ["wafw00f", "nuclei", "nmap"])
+    waf_tools: list[str] = field(default_factory=lambda: ["wafw00f", "nuclei"])
     harvester_source: str = "all"
     harvester_limit: int = 500
     harvester_dns_server: str | None = None
@@ -284,7 +280,6 @@ class Pipeline:
             "ports": self.stage_ports,
             "http": self.stage_http,
             "cloud": self.stage_cloud,
-            "nuclei": self.stage_nuclei,
             "bypass": self.stage_bypass,
             "gau": self.stage_gau,
             "crawl": self.stage_crawl,
@@ -1243,51 +1238,31 @@ class Pipeline:
     def stage_waf(self) -> str:
         if not self.options.active:
             raise ValidationError("WAF detection performs direct HTTP probes and requires -active")
-        urls = {f"https://{domain}" for domain in self.target.domains}
-        for discovered in self.workspace.values("url", in_scope=True):
-            parsed = urlsplit(discovered)
-            if parsed.scheme in {"http", "https"} and parsed.netloc:
-                urls.add(f"{parsed.scheme}://{parsed.netloc}")
+        urls = select_live_http_origins(self.workspace.findings, self.target.domains)
         added = 0
         completed: list[str] = []
         for tool in self.options.waf_tools:
             binary = self._tool_or_plan(tool)
             if not binary:
                 continue
-            for url in sorted(urls):
+            for url in urls:
                 parsed = urlsplit(url)
                 host = parsed.hostname or ""
                 if not host:
                     continue
-                slug = self._artifact_slug(f"{host}-{parsed.port or 443}")
+                effective_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+                slug = self._artifact_slug(f"{parsed.scheme}-{host}-{effective_port}")
                 if tool == "wafw00f":
                     argv = [binary, url, "-a"]
                     command_timeout = max(180, self.options.timeout * 5)
                     parser = lambda value: waf.parse_wafw00f(value, url, self.target)
                 elif tool == "nuclei":
-                    argv = [
+                    argv = waf.build_nuclei_waf_argv(
                         binary,
-                        "-u",
                         url,
-                        "-t",
-                        "http/technologies/waf-detect.yaml",
-                        "-jsonl",
-                        "-rl",
-                        "1",
-                        "-bulk-size",
-                        "1",
-                        "-c",
-                        "1",
-                        "-timeout",
-                        str(self.options.timeout),
-                        "-retries",
-                        "1",
-                        "-no-stdin",
-                        "-omit-raw",
-                        "-no-color",
-                    ]
-                    if not self.console.verbose:
-                        argv.append("-silent")
+                        timeout=self.options.timeout,
+                        silent=not bool(self.console.verbose),
+                    )
                     command_timeout = max(120, self.options.timeout * 5)
                     parser = lambda value: waf.parse_nuclei(value, url, self.target)
                 elif tool == "nmap":
@@ -1311,6 +1286,7 @@ class Pipeline:
                 else:
                     raise ValidationError(f"unsupported WAF adapter: {tool}")
                 result = self.runner.run(argv, timeout=command_timeout)
+                completed.append(tool)
                 if result.skipped:
                     continue
                 self.workspace.write_text(f"waf/{slug}-{tool}.txt", result.stdout)
@@ -1319,7 +1295,6 @@ class Pipeline:
                         f"{tool} WAF check exited with {result.returncode} for {url}; partial output will still be parsed"
                     )
                 added += self._ingest_findings(parser(result.stdout))
-                completed.append(tool)
         return f"{added} normalized WAF observations with {', '.join(sorted(set(completed))) or 'no tools'}"
 
     def stage_shodan(self) -> str:
@@ -1654,37 +1629,6 @@ class Pipeline:
         self._run_httpx(binary, input_file, stage="http", tech_detect=True)
         return f"{len(self.workspace.findings) - before} HTTP/technology findings from {len(targets)} targets"
 
-    def stage_nuclei(self) -> str:
-        if not self.options.active:
-            raise ValidationError("nuclei performs direct checks and requires -active")
-        urls = self.workspace.values("url", in_scope=True)
-        if not urls:
-            return "no authorized live URLs available for Nuclei"
-        binary = self._tool_or_plan("nuclei")
-        if not binary:
-            return "nuclei unavailable; template checks skipped"
-        input_file = self.workspace.write_lines("nuclei-targets.txt", urls)
-        argv = nuclei.build_argv(
-            binary,
-            str(input_file),
-            tags=self.options.nuclei_tags,
-            severities=self.options.nuclei_severities,
-            rate_limit=self.options.nuclei_rate_limit,
-            concurrency=self.options.nuclei_concurrency,
-            timeout=self.options.timeout,
-            verbose=self.console.verbose,
-        )
-        result = self.runner.run(argv, timeout=max(3600, self.options.timeout * 300))
-        if result.skipped:
-            return f"dry-run planned for {len(urls)} URLs"
-        self.workspace.write_text("nuclei.jsonl", result.stdout)
-        if result.returncode != 0:
-            self.console.warn(
-                f"nuclei exited with {result.returncode}; partial JSONL will still be ingested"
-            )
-        added = self._ingest_findings(nuclei.parse_output(result.stdout, self.target))
-        return f"{added} normalized Nuclei observations from {len(urls)} URLs"
-
     def stage_bypass(self) -> str:
         if not self.options.active:
             raise ValidationError("bypass validation requires -active")
@@ -1753,17 +1697,8 @@ class Pipeline:
     def stage_crawl(self) -> str:
         if not self.options.active:
             raise ValidationError("crawl performs direct requests and requires -active")
-        urls = sorted(
-            {
-                item.value
-                for item in self.workspace.findings
-                if item.kind == "url"
-                and item.in_scope
-                and (
-                    item.metadata.get("status_code") is None
-                    or str(item.metadata.get("status_code")).startswith(("2", "3"))
-                )
-            }
+        urls = select_live_http_origins(
+            self.workspace.findings, self.target.domains
         )[: self.options.max_crawl_urls]
         if not urls:
             return "no authorized URLs available for crawling"
@@ -1789,7 +1724,7 @@ class Pipeline:
                     added += self._ingest_findings(katana.parse_output(result.stdout, self.target))
             else:
                 result = self.runner.run(
-                    cariddi.build_argv(binary),
+                    cariddi.build_argv(binary, timeout=self.options.timeout),
                     input_text="\n".join(urls) + "\n",
                     timeout=max(1800, self.options.timeout * 100),
                 )

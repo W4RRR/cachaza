@@ -15,8 +15,9 @@ Cachaza turns a domain or an explicitly approved network scope into a reproducib
 - Automatic Origin candidate discovery, explainable scoring, and bounded Direct-origin validation with `-origin-auto`.
 - Automatic DNS, ASN, prefix, registry, and network-holder enrichment.
 - Passive discovery through Certificate Transparency, Censys Platform, IntelX Phonebook, urlscan, Shodan, Subfinder providers, and historical URL archives.
-- Bounded active adapters for dnsx, Caduceus, Naabu, Nmap, httpx, Nuclei, 403jump, Katana, Cariddi, the bundled source-map analyzer, CSP Stalker, Favicorn, and Vulnx.
-- Focused `-w` WAF correlation across wafw00f, Nuclei, and Nmap NSE.
+- Bounded active adapters for dnsx, Caduceus, Naabu, Nmap, httpx, 403jump, Katana, endpoint-only Cariddi, the bundled source-map analyzer, CSP Stalker, Favicorn, and Vulnx.
+- Focused WAF identification with wafw00f and Nuclei's single `http/technologies/waf-detect.yaml` template; Nmap NSE is optional correlation.
+- Endpoint inventories from GAU, Katana, Cariddi, JavaScript analysis, and existing passive sources. Nuclei never participates in endpoint discovery or vulnerability scanning.
 - Focused `-harvester` theHarvester contact/API discovery and `-dns-enum` dnsenum/Fierce enumeration with prominent zone-transfer warnings.
 - Authorized `-blw LEVEL` BlackWidow crawling and Inject-X candidate checks, normalized without presenting candidates as confirmed vulnerabilities.
 - Conservative `-s` Subfinder + Assetfinder enumeration with normalized, deduplicated names.
@@ -144,7 +145,7 @@ cachaza run -d example.com -profile full -active -s \
   -o max-everything -format all -v
 ```
 
-The second command is deliberately noisy, can take a long time, consumes provider credits, crawls the site, and performs active candidate checks. Use it only with written authorization. `-profile full` alone does not implicitly enable the focused `-harvester`, `-dns-enum`, `-w`, or `-blw` bundles.
+The second command is deliberately noisy, can take a long time, consumes provider credits, crawls the site, and performs active candidate checks. Use it only with written authorization. `-profile full` already includes the focused `waf` stage with its safe default tools, so `-w` is redundant here but documents intent. The profile does not implicitly enable `-harvester`, `-dns-enum`, or `-blw`.
 
 ## Automatic Origin discovery
 
@@ -194,19 +195,19 @@ Cloudflare-specific interpretation follows the vendor's current documentation: a
 |---|---:|---|
 | `passive` | No application/network scanning | `corporate`, `asn`, `tenant`, `ct`, `api`, `subdomains`, `shodan`, `cloud`, `gau` |
 | `safe` | Yes; requires `-active` | Passive funnel plus `certificates`, `dns`, `ports`, and `http` |
-| `full` | Yes; requires `-active` | Safe funnel plus `nuclei`, `bypass`, `crawl`, `js`, `policies`, and `cve` |
+| `full` | Yes; requires `-active` | Safe reconnaissance plus GAU, endpoint crawling, JavaScript endpoint mapping, and focused WAF identification. |
 
 Choose the profile according to the engagement boundary:
 
 - **`passive`** is the default. It collects public OSINT, Certificate Transparency, historical URLs, tenant relationships, infrastructure, and passive subdomains without directly probing the target application or network.
 - **`safe`** starts with the passive funnel, then performs bounded certificate, DNS, port, and HTTP validation. It must be explicitly authorized with `-active`.
-- **`full`** includes everything in `safe`, then adds Nuclei observations, 403-bypass checks, crawling, JavaScript and policy analysis, and CVE correlation. It also requires `-active` and is intended for a fully authorized assessment.
+- **`full`** includes everything in `safe`, then adds historical URL discovery, endpoint crawling, JavaScript endpoint mapping, and focused WAF identification. It also requires `-active`. It does not run the explicit `bypass`, `policies`, or `cve` stages automatically.
 
 `-stages` replaces the selected profile's stage list. `-skip-stages` removes specific stages while preserving the remaining order.
 
 ```bash
 cachaza run -d example.com -stages asn,ct,api,subdomains,gau -o focused
-cachaza run -d example.com -profile full -active -skip-stages bypass,cve -o full-without-cve
+cachaza run -d example.com -profile full -active -skip-stages js -o full-without-js
 ```
 
 Any explicit active stage still requires `-active`, even when selected through `-stages`.
@@ -226,16 +227,15 @@ Any explicit active stage still requires `-active`, even when selected through `
 | `dns_enum` | Active/optional | Runs dnsenum and Fierce for authorized DNS discovery; successful AXFR is recorded as a high-risk normalized finding. |
 | `harvester` | Active/optional | Runs theHarvester's source, Shodan, API endpoint, and takeover workflow and extracts normalized contact/surface data. |
 | `blackwidow` | Active/optional | Runs BlackWidow at the requested depth with crawling and Inject-X, then normalizes URLs, subdomains, APIs, contacts, forms, and manual-validation candidates. |
-| `waf` | Active/optional | Correlates wafw00f, the Nuclei WAF template, and two Nmap NSE WAF scripts per unique authorized web origin. |
+| `waf` | Active | Runs wafw00f and the single Nuclei WAF template per unique live authorized HTTP origin; Nmap NSE is optional. |
 | `shodan` | Passive | Generates signatures and optionally performs bounded count/search API calls. |
 | `ports` | Mixed | Uses Naabu/Nmap for authorized probes and Smap for Shodan-backed observations. |
 | `http` | Active | Probes approved names/services with httpx and records status, server, ASN, CNAME, CDN, IP, and technology evidence. |
 | `cloud` | Passive | Classifies existing IP/CIDR findings against provider ranges; never expands scope. |
-| `nuclei` | Active | Runs bounded tagged templates and stores normalized observations requiring operator validation. |
 | `bypass` | Active | Tests observed in-scope HTTP 403 URLs and records possible bypasses as candidates. |
-| `gau` | Passive | Collects archived URLs and flags sensitive filename candidates. |
-| `crawl` | Active | Runs scoped Katana or Cariddi endpoint discovery. |
-| `js` | Active | Analyzes discovered in-scope JavaScript URLs with Cachaza's bundled, same-origin `JSMap-Inspector` CLI. |
+| `gau` | Passive | Collects archived URLs with host, path, historical source, and API-endpoint hints; archived URLs are not treated as live. |
+| `crawl` | Active | Runs scoped Katana or endpoint-only Cariddi discovery without fuzzing, payloads, or secret hunting. |
+| `js` | Active | Extracts related URLs, API routes, JavaScript files, and Swagger/OpenAPI/GraphQL references with the bundled same-origin `JSMap-Inspector` CLI. |
 | `policies` | Active | Collects CSP observations and favicon fingerprints. |
 | `cve` | Passive correlation after active fingerprinting | Correlates observed technologies with Vulnx; results are candidates, not confirmed vulnerabilities. |
 
@@ -317,11 +317,11 @@ Censys is primarily infrastructure search, so a valid Censys run is not expected
 
 ## VPN-safe network policy
 
-Cachaza enforces a product-wide ceiling of **2 request/packet starts per second** and **2 concurrent network workers**. Native HTTP sources share one process-wide limiter. For Subfinder, dnsx, Nuclei, Katana, httpx, Naabu, Nmap, Caduceus, and TLSx, Cachaza also rewrites their native rate/concurrency arguments so a higher caller-provided value cannot escape the ceiling. Common subprocess worker-pool environment variables and simultaneous child-process starts are capped at two as an additional safeguard.
+Cachaza enforces a product-wide ceiling of **2 request/packet starts per second** and **2 concurrent network workers**. Native HTTP sources share one process-wide limiter. For Subfinder, dnsx, Katana, httpx, Naabu, Nmap, Caduceus, and TLSx, Cachaza also rewrites their native rate/concurrency arguments so a higher caller-provided value cannot escape the ceiling. Nuclei is more restrictive: its only permitted WAF command is forced to `-rl 1 -bulk-size 1 -c 1 -retries 0`. Common subprocess worker-pool environment variables and simultaneous child-process starts are capped at two as an additional safeguard.
 
-The CLI rejects `-jobs`, `-rate-limit`, Nuclei, subdomain, or Origin values above two instead of silently accepting an unsafe configuration. Lower values remain valid. Colors are enabled by default even when output is piped through `tee`; use either `-nc` or `-no-color` to disable ANSI colors in the console and `report.txt`.
+The CLI rejects `-jobs`, `-rate-limit`, subdomain, or Origin values above two instead of silently accepting an unsafe configuration. Nuclei has no user-configurable template, tag, severity, rate, or concurrency options. Colors are enabled by default even when output is piped through `tee`; use either `-nc` or `-no-color` to disable ANSI colors in the console and `report.txt`.
 
-Some independent upstream programs do not expose a trustworthy requests-per-second option. Cachaza can bound their process scheduling and common runtime worker pools, but it cannot inspect arbitrary internal schedulers. For a strict auditable engagement, select only adapters with native limits. The high-volume components most likely to saturate a VPN—Naabu, Nuclei, httpx, dnsx, Subfinder, and Katana—are explicitly capped.
+Some independent upstream programs do not expose a trustworthy requests-per-second option. Cachaza can bound their process scheduling and common runtime worker pools, but it cannot inspect arbitrary internal schedulers. For a strict auditable engagement, select only adapters with native limits. Naabu, httpx, dnsx, Subfinder, and Katana are explicitly capped; Nuclei is limited to one WAF template against one normalized origin per process invocation.
 
 These controls reduce burst load but do not change interface MTU. If the VPN still drops at two requests per second, measure the tunnel path MTU separately and adjust the VPN interface/MSS; a `502` from one public API is not an MTU diagnosis.
 
@@ -335,8 +335,6 @@ cachaza run -d example.com \
   -ports 80,443,8080,8443 \
   -rate-limit 2 \
   -max-active-hosts 256 \
-  -nuclei-rate-limit 2 \
-  -nuclei-concurrency 2 \
   -max-crawl-urls 25 \
   -o authorized-run -format all
 ```
@@ -346,8 +344,7 @@ Useful selectors:
 ```bash
 -port-tools naabu,smap        # naabu,smap,nmap
 -crawl-tools auto             # auto,katana,cariddi
--nuclei-tags waf,cors,login,misconfig,exposure
--nuclei-severity info,low,medium,high,critical
+-waf-tools wafw00f,nuclei     # add nmap only for explicit NSE correlation
 ```
 
 `JSMap-Inspector` is bundled with Cachaza because the similarly named upstream project is an offline HTML interface, not an automatable CLI. `cachaza doctor -install` also installs a pinned, request-limited CSP Stalker wrapper. Use `-jsmap-path` or `-csp-stalker-path` only to select an explicitly installed compatible replacement.
@@ -370,7 +367,7 @@ These switches add one focused stage to the selected profile. `-w`, `-harvester`
 
 | Shortcut | Long option | Tools and concrete behavior | Normalized output |
 |---|---|---|---|
-| `-w` | `-waf` | Runs `wafw00f URL -a`, the single Nuclei `http/technologies/waf-detect.yaml` template at `-rl 1 -bulk-size 1 -c 1`, and the Nmap `http-waf-detect` + intensive `http-waf-fingerprint` NSE scripts. Nuclei uses one retry, does not read stdin, omits bulky raw request/response data, and has a bounded execution timeout. | Deduplicated `waf` findings with target, source, confidence, and bounded evidence. |
+| `-w` | `-waf` | Runs `wafw00f URL -a` and only Nuclei's `http/technologies/waf-detect.yaml` template at `-rl 1 -bulk-size 1 -c 1 -retries 0`. Nmap's `http-waf-detect` and intensive `http-waf-fingerprint` scripts run only when `nmap` is explicitly added to `-waf-tools`. | Deduplicated `waf` findings that retain target origin, vendor, source, confidence, and bounded evidence. |
 | `-harvester` | - | Runs theHarvester per root with Shodan, API scanning, takeover checks, and `-b all`; `-harvester-dns-server` supplies the optional `-e` value. | Emails, phones, addresses, hosts, URLs, API endpoints, IPs, and redacted API-key candidates. |
 | `-dns-enum` | - | Runs `dnsenum DOMAIN` and `fierce -dns DOMAIN`, saves raw output separately, and correlates names and addresses. | Deduplicated domains/IPs plus a high-visibility `dns_zone_transfer` finding if AXFR succeeds. |
 | `-s` | `-subdomains` | Ensures both `assetfinder --subs-only DOMAIN` and rate-limited Subfinder (`-all -rl 1 -t 1`) are selected. | In-scope domain findings with source/provider provenance. |
@@ -384,15 +381,49 @@ cachaza run -d example.com \
   -o focused-example -format all -v
 ```
 
+### Endpoint reconnaissance
+
+The `full` profile orders `http` before `waf` and obtains endpoint evidence from GAU, Katana or Cariddi, JavaScript analysis, and existing passive sources:
+
+```bash
+cachaza run \
+  -d example.com \
+  -profile full \
+  -active \
+  -format all \
+  -o example-recon
+
+cachaza run \
+  -d example.com \
+  -stages http,gau,crawl,js,waf \
+  -crawl-tools katana \
+  -waf-tools wafw00f,nuclei \
+  -active \
+  -format all \
+  -o example-endpoints
+```
+
+GAU records remain historical until another source confirms a live response. Katana remains FQDN-scoped and bounded. Cariddi uses endpoint discovery only (`-e -plain`) and never enables its `-s` secret-hunting mode. JavaScript analysis extracts related files, URLs, routes, and Swagger/OpenAPI/GraphQL references; strings such as `token`, `password`, or `secret` are not promoted to security findings by this flow.
+
 ### WAF correlation
 
 ```bash
 cachaza run -d example.com -w -active -o example-waf -format all
 cachaza run -d example.com -w -active -waf-tools wafw00f,nuclei -o example-waf
-cachaza run -d example.com -stages waf -waf-tools nuclei -active -o example-nuclei-waf -format all -v
+cachaza run \
+  -d example.com \
+  -stages waf \
+  -waf-tools nuclei \
+  -active \
+  -format all \
+  -o example-waf
 ```
 
-The third command is the focused, low-impact Nuclei-only check: it runs one WAF template, one request per second, one host per batch, and one concurrent template. In contrast, the `nuclei` stage included by `-profile full` is a general scan across the configured tags and severities and can load thousands of templates. With `-v`, that general scan prints progress statistics every 30 seconds so a quiet interval is not mistaken for a hang. Use `-skip-stages nuclei -w -waf-tools nuclei` when you want the rest of the full workflow but only the focused WAF check from Nuclei.
+The third command is the only Nuclei behavior available in Cachaza: one immutable WAF template, one request per second, one host per batch, one concurrent template, and zero retries. The former general `nuclei` stage and all tag/severity controls have been removed. `-stages nuclei` returns an actionable error instead of silently changing behavior.
+
+WAF targets are deduplicated by `scheme + hostname + effective port`, never by individual path. Default ports are collapsed (`https://example.com:443/login` becomes `https://example.com`); a non-standard port is retained only after httpx or a crawler confirms a live HTTP(S) URL. GAU history, DNS records, Naabu services, and Nmap services do not become Nuclei targets. If `waf` runs alone without live URL evidence, the only fallback is `https://ROOT_DOMAIN`.
+
+Nuclei is restricted to the single WAF detection template. Cachaza does not use Nuclei for vulnerability scanning or endpoint discovery.
 
 Cachaza invokes `nmap` directly, not through `sudo`, because an internal privilege prompt would break unattended runs. Start Cachaza from an appropriately privileged shell if the local Nmap configuration needs elevated access. A product name reported by multiple tools is presented once in the key summary while every source-specific observation remains in the evidence records.
 
@@ -478,7 +509,11 @@ Important workspace files:
 | `rest/manifest.json` | Version, profile, stage states, counts, and command history. |
 | `rest/api/provider-status.json` | Native Censys/IntelX/urlscan request status and safe diagnostics; never contains configured API keys. |
 | `rest/stages/*.json` | Completed stage checkpoints. |
-| `rest/domains.txt`, `rest/urls.txt`, `rest/services.txt` | Derived convenience views, not separate sources of truth. |
+| `rest/domains.txt`, `rest/services.txt` | Derived convenience views, not separate sources of truth. |
+| `rest/urls.txt` | Complete in-scope URLs as observed by their source. |
+| `rest/endpoints.txt` | Deduplicated endpoint URLs without fragments or query values; sorted parameter names are retained. |
+| `rest/api-endpoints.txt` | Explicit API findings plus URL findings marked as API endpoints by GAU, crawlers, or JavaScript analysis. |
+| `rest/wafs.txt` | One tab-separated `origin`, `vendor`, `source` row per retained WAF observation. |
 | `rest/security-findings.txt`, `rest/cve-candidates.txt` | Human-readable filtered views. |
 
 Reusing a compatible `-o` workspace resumes it automatically. Use `-resume` when the workspace must already exist, or `-fresh` to reset only a verified workspace whose saved scope matches the current request.

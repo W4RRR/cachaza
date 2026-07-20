@@ -41,6 +41,7 @@ def build_key_findings(findings: list[Finding] | list[dict[str, Any]]) -> dict[s
         if item.get("stage") == "input" and item.get("kind") == "domain"
     }
     buckets: dict[str, set[str]] = {key: set() for key, _ in KEY_FINDING_LABELS}
+    waf_targets: dict[str, set[str]] = {}
     for item in normalized:
         kind = str(item.get("kind") or "")
         value = str(item.get("value") or "").strip()
@@ -49,7 +50,9 @@ def build_key_findings(findings: list[Finding] | list[dict[str, Any]]) -> dict[s
         if not value:
             continue
         if kind == "waf":
-            buckets["wafs"].add(value)
+            vendor = str(metadata.get("vendor") or value).strip()
+            origin = str(metadata.get("target") or "unknown origin").strip()
+            waf_targets.setdefault(vendor, set()).add(origin)
         if kind == "api_key_candidate":
             # Parsers store only redacted fingerprints or the URL where a
             # candidate appeared. Never promote raw secret material here.
@@ -76,9 +79,8 @@ def build_key_findings(findings: list[Finding] | list[dict[str, Any]]) -> dict[s
             buckets["addresses"].add(value)
         if kind == "dns_zone_transfer" and metadata.get("allowed"):
             buckets["zone_transfer_allowed"].add(value)
-    named_wafs = {value for value in buckets["wafs"] if "vendor unknown" not in value.casefold()}
-    if named_wafs:
-        buckets["wafs"] = named_wafs
+    for vendor, origins in waf_targets.items():
+        buckets["wafs"].add(f"{vendor} @ {', '.join(sorted(origins, key=str.casefold))}")
     return {key: sorted(values, key=str.casefold) for key, values in buckets.items()}
 
 
@@ -100,6 +102,8 @@ def render_key_findings_console(
                 if shown
                 else paint("not observed", "32")
             )
+        elif key == "wafs" and not shown:
+            rendered = "no evidence observed"
         else:
             rendered = ", ".join(shown) if shown else "-"
         lines.append(f"{label:<26}: {rendered}{suffix}")
@@ -941,7 +945,9 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
     for key, label in KEY_FINDING_LABELS:
         values = list(key_findings.get(key, []))
         limit = 13 if key == "subdomains" else 8
-        rendered = ", ".join(values[:limit]) or "-"
+        rendered = ", ".join(values[:limit]) or (
+            "No evidence observed" if key == "wafs" else "-"
+        )
         if len(values) > limit:
             rendered += f" (+{len(values) - limit} more in structured reports)"
         if key == "zone_transfer_allowed":

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .models import Finding, StageStatus, TargetSpec, utc_now
+from .web import normalize_endpoint_url
 
 
 def _slug(value: str) -> str:
@@ -27,7 +28,7 @@ class RunWorkspace:
         self.stage_state.mkdir(parents=True, exist_ok=True)
         self.findings_path = self.rest / "findings.jsonl"
         self.findings: list[Finding] = []
-        self._seen: set[tuple[str, str, str]] = set()
+        self._seen: set[tuple[str, str, str, str]] = set()
         self.stages: list[StageStatus] = []
         if resume:
             legacy_findings = self.root / "findings.jsonl"
@@ -88,10 +89,19 @@ class RunWorkspace:
             except (json.JSONDecodeError, TypeError):
                 continue
             self.findings.append(finding)
-            self._seen.add((finding.source, finding.kind, finding.value))
+            self._seen.add(self._finding_key(finding))
+
+    @staticmethod
+    def _finding_key(finding: Finding) -> tuple[str, str, str, str]:
+        target = (
+            str(finding.metadata.get("target") or "")
+            if finding.kind == "waf"
+            else ""
+        )
+        return finding.source, finding.kind, finding.value, target
 
     def add(self, finding: Finding) -> bool:
-        key = (finding.source, finding.kind, finding.value)
+        key = self._finding_key(finding)
         if key in self._seen:
             return False
         self._seen.add(key)
@@ -184,23 +194,53 @@ class RunWorkspace:
             "ips.txt": ("ip", True),
             "candidate-ips.txt": ("ip", False),
             "network-registrations.txt": ("network_registration", None),
-            "urls.txt": ("url", True),
             "services.txt": ("service", True),
             "fingerprints.txt": ("fingerprint", None),
             "technologies.txt": ("technology", None),
             "security-findings.txt": ("security_finding", None),
             "policy-findings.txt": ("policy_finding", None),
             "cve-candidates.txt": ("cve_candidate", None),
-            "wafs.txt": ("waf", None),
             "emails.txt": ("email", None),
             "phones.txt": ("phone", None),
             "addresses.txt": ("address", None),
-            "api-endpoints.txt": ("api_endpoint", None),
             "api-key-candidates.txt": ("api_key_candidate", None),
             "zone-transfers.txt": ("dns_zone_transfer", None),
         }
         for filename, (kind, in_scope) in mapping.items():
             self.write_lines(filename, self.values(kind, in_scope=in_scope))
+        self.write_lines("urls.txt", self.values("url", in_scope=True))
+        endpoint_values = {
+            normalized
+            for finding in self.findings
+            if finding.in_scope and finding.kind in {"url", "api_endpoint"}
+            if (normalized := normalize_endpoint_url(finding.value))
+        }
+        api_endpoint_values = {
+            normalized
+            for finding in self.findings
+            if finding.in_scope
+            and (
+                finding.kind == "api_endpoint"
+                or (finding.kind == "url" and finding.metadata.get("endpoint") is True)
+            )
+            if (normalized := normalize_endpoint_url(finding.value))
+        }
+        self.write_lines("endpoints.txt", sorted(endpoint_values, key=str.casefold))
+        self.write_lines(
+            "api-endpoints.txt", sorted(api_endpoint_values, key=str.casefold)
+        )
+        waf_rows = {
+            "\t".join(
+                (
+                    str(finding.metadata.get("target") or "unknown-origin"),
+                    str(finding.metadata.get("vendor") or finding.value),
+                    finding.source,
+                )
+            )
+            for finding in self.findings
+            if finding.kind == "waf"
+        }
+        self.write_lines("wafs.txt", sorted(waf_rows, key=str.casefold))
 
     def counts(self) -> dict[str, int]:
         return dict(sorted(Counter(item.kind for item in self.findings).items()))
