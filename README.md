@@ -2,42 +2,100 @@
 
 > Passive-first OSINT and authorized reconnaissance orchestration for Kali Linux.
 
-Cachaza turns a domain or an explicitly approved network scope into a reproducible reconnaissance workspace. It keeps every observation in one normalized `Finding` model, preserves provenance, separates authorized scope from candidate intelligence, and produces self-contained reports with a relationship graph.
-
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Kali%20Linux-557C94.svg)](https://www.kali.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-## Features
+Cachaza turns an explicitly defined domain or network scope into a reproducible reconnaissance workspace. It collects passive intelligence first, applies scope decisions to every observation, and requires explicit authorization before direct-contact stages run.
 
-- Passive-first operation with `passive`, `safe`, and `full` profiles.
-- Explicit `-active` authorization gate for every direct-contact stage.
-- Automatic Origin candidate discovery, explainable scoring, and bounded Direct-origin validation with `-origin-auto`.
-- Automatic DNS, ASN, prefix, registry, and network-holder enrichment.
-- Passive discovery through Certificate Transparency, Censys Platform, IntelX Phonebook, urlscan, Shodan, Subfinder providers, and historical URL archives.
-- Bounded active adapters for dnsx, Caduceus, Naabu, Nmap, httpx, 403jump, Katana, endpoint-only Cariddi, the bundled source-map analyzer, CSP Stalker, Favicorn, and Vulnx.
-- Focused WAF identification with wafw00f and Nuclei's single `http/technologies/waf-detect.yaml` template; Nmap NSE is optional correlation.
-- Endpoint inventories from GAU, Katana, Cariddi, JavaScript analysis, and existing passive sources. Nuclei never participates in endpoint discovery or vulnerability scanning.
-- Focused `-harvester` theHarvester contact/API discovery and `-dns-enum` dnsenum/Fierce enumeration with prominent zone-transfer warnings.
-- Authorized `-blw LEVEL` BlackWidow crawling and Inject-X candidate checks, normalized without presenting candidates as confirmed vulnerabilities.
-- Conservative `-s` Subfinder + Assetfinder enumeration with normalized, deduplicated names.
-- Normalized findings with `stage`, `source`, `kind`, `value`, `in_scope`, `metadata`, and `observed_at`.
-- HTML, JSON, TXT, PDF, and CSV reports with executive key findings and a relationship explorer that previews nodes on hover.
-- Resume checkpoints and safe fresh-run handling inside a verified workspace.
-- Startup version checks plus an explicit `cachaza -update`/`-up` workflow.
-- HTML escaping and Content Security Policy protection, plus CSV formula-injection neutralization.
+All observations use one normalized evidence model with source, scope, metadata, and timestamp. Cachaza then produces machine-readable inventories and self-contained reports without treating candidate findings as confirmed vulnerabilities.
 
-## Authorized use only
+> [!IMPORTANT]
+> Use Cachaza only against systems you own or are explicitly authorized to assess. A domain does not automatically authorize related ASNs, prefixes, IP addresses, cloud ranges, or third-party infrastructure. Active stages require `-active`; automatic Direct-origin validation also requires `-authorized`. Candidate findings are evidence for review, not confirmed vulnerabilities.
 
-Use Cachaza only against systems you own or are explicitly authorized to assess. A domain-derived ASN, prefix, IP, tenant, cloud range, or search result is contextual intelligence; it is not proof of ownership and never expands active scope automatically.
+## Contents
 
-Direct probes require `-active`. Large network ranges also remain subject to the configured host limit unless `-allow-large-ranges` is deliberately supplied.
+- [Quick start](#-quick-start)
+- [Profiles](#-profiles)
+- [Pipeline overview](#-pipeline-overview)
+- [Endpoint discovery](#-endpoint-discovery)
+- [WAF identification](#-waf-identification)
+- [Origin discovery](#-origin-discovery)
+- [Scope and authorization](#-scope-and-authorization)
+- [Credentials and providers](#-credentials-and-providers)
+- [Reports and workspace](#-reports-and-workspace)
+- [Command reference](#command-reference)
+- [Optional tools](#optional-tools)
+- [Development and testing](#-development-and-testing)
 
-## Install on Kali
+## 🔎 What is Cachaza?
+
+Cachaza is a Python CLI for passive OSINT, authorized infrastructure validation, web endpoint mapping, focused WAF identification, and evidence reporting. It is designed for Kali Linux and supports domain-only workflows as well as explicitly supplied ASNs and CIDRs.
+
+The pipeline follows a funnel:
+
+1. Normalize the operator-supplied scope.
+2. Collect public and provider-backed intelligence.
+3. Preserve inferred infrastructure as candidate evidence.
+4. Run bounded direct validation only when authorized.
+5. Export reports, inventories, raw artifacts, and resumable stage state.
+
+The canonical evidence stream is `rest/findings.jsonl`. Text inventories and reports are derived views of that stream.
+
+## ✨ Highlights
+
+- **Passive-first collection:** Certificate Transparency, provider APIs, tenant relationships, subdomains, Shodan signatures, network context, cloud classification, and historical URLs.
+- **Explicit authorization controls:** `safe`, `full`, and individually selected active stages are blocked without `-active`.
+- **Normalized evidence:** Every finding retains its stage, source, kind, value, scope decision, metadata, and observation time.
+- **Endpoint inventory:** GAU, Katana, endpoint-only Cariddi, JavaScript analysis, and passive URL sources feed deduplicated URL and API inventories.
+- **Focused WAF identification:** wafw00f and one immutable Nuclei WAF template are the defaults; Nmap correlation is optional.
+- **Origin correlation:** Candidate origins are collected, filtered, scored, and optionally validated through a separate bounded workflow.
+- **Reproducible workspaces:** Reports, raw evidence, command history, scope, and cache-keyed stage checkpoints remain together.
+- **Conservative automation:** Native and supported external network operations are rate- and concurrency-bounded, with stricter fixed limits for Nuclei.
+
+## 🚦 What Cachaza does — and does not do
+
+### Cachaza does
+
+- Collect passive OSINT and correlate domains, subdomains, ASNs, prefixes, registrations, IPs, and providers.
+- Validate DNS, certificates, ports, and live HTTP services inside authorized scope.
+- Build URL, endpoint, API endpoint, technology, and WAF inventories.
+- Preserve provenance and distinguish authorized evidence from candidate infrastructure.
+- Produce HTML, JSON, TXT, PDF, and CSV reports.
+- Resume compatible workspaces without repeating completed stages.
+- Discover and score possible Origin infrastructure under explicit filters and request budgets.
+
+### Cachaza does not
+
+- Expand active scope from a domain-derived ASN, CIDR, IP, cloud range, or search result.
+- Use Nuclei for vulnerabilities, CVEs, exposures, login panels, CORS, misconfigurations, endpoints, automatic scans, workflows, or general templates.
+- Convert candidate findings into confirmed vulnerabilities.
+- Treat an archived URL as evidence that the URL is currently live.
+- Exploit observed weaknesses or run unbounded path fuzzing.
+- Attempt to defeat mTLS, Authenticated Origin Pulls, network ACLs, or Cloudflare Tunnel.
+- Claim that a high-confidence Origin correlation proves ownership or authorization.
+
+Explicit `bypass`, `policies`, `cve`, and BlackWidow functionality remains available for authorized, focused workflows. Those results are normalized as observations or candidates and are not enabled automatically by the `full` profile.
+
+## ⚡ Quick start
+
+### Requirements
+
+| Requirement | Purpose |
+|---|---|
+| Kali Linux | Supported operating environment |
+| Python 3.11 or newer | Core Cachaza package |
+| Git | Clone and checkout-based updates |
+| pipx | Isolated CLI installation |
+| Go | Optional; required only to install Go-based external adapters |
+
+### Install on Kali Linux
+
+Install the Python application first:
 
 ```bash
 sudo apt update
-sudo apt install -y git golang-go pipx python3-venv
+sudo apt install -y git pipx python3-venv
 pipx ensurepath
 
 mkdir -p ~/tools
@@ -46,220 +104,318 @@ cd ~/tools/cachaza
 pipx install .
 
 cachaza -version
+cachaza doctor
+```
+
+To install supported Go and user-space adapters as well:
+
+```bash
+sudo apt install -y golang-go
 cachaza doctor -install
 cachaza doctor
 ```
 
-## Startup banner and updates
+Open a new shell if `pipx ensurepath` changed your `PATH`. `doctor -install` does not invoke `sudo`; Kali system packages remain under administrator control.
 
-Interactive commands display the cocktail first, followed by the full Cachaza wordmark, project attribution, and installed version:
+### First passive run
 
-```text
-                             .-========-.
-                              \   o   /
-                               \     /
-                                `---'
-                                  ||
-                                  ||
-                                __||__
-                               /______\
-
-_________     _____  _________   ___ ___    _____  __________  _____
-\_   ___ \   /  _  \ \_   ___ \ /   |   \  /  _  \ \____    / /  _  \
-/    \  \/  /  /_\  \/    \  \//    ~    \/  /_\  \  /     / /  /_\  \
-\     \____/    |    \     \___\    Y    /    |    \/     /_/    |    \
- \______  /\____|__  /\______  /\___|_  /\____|__  /_______ \____|__  /
-        \/         \/        \/       \/         \/        \/       \/
-                   github.com/W4RRR/cachaza by W4RRR
-                                v0.10.2
-```
-
-`-silent` suppresses the banner together with progress and findings. Cachaza checks the public GitHub version at most once every 24 hours. If a newer release is found in an interactive terminal, it offers `Update now? [Y/n]`. Non-interactive jobs are never blocked by a prompt; they receive the update command instead. Disable the network check for controlled/offline environments with `CACHAZA_SKIP_UPDATE_CHECK=1`.
-
-Update explicitly at any time:
+The default profile is `passive`:
 
 ```bash
-cachaza -up
-# equivalent
-cachaza -update
+cachaza run -d example.com -o example-passive
 ```
 
-From a Git checkout this performs the safe fast-forward workflow and then verifies the installation:
+A simple output name is created under `./output`, so this writes to `./output/example-passive`. The default report formats are JSON and TXT.
+
+### First authorized run
 
 ```bash
-git pull --ff-only origin main && \
-pipx install --force . && \
-cachaza -version && \
-cachaza doctor
+cachaza run -d example.com \
+  -profile safe \
+  -active \
+  -format all \
+  -o example-safe
 ```
 
-For a pipx installation without a local checkout, Cachaza reinstalls directly from `https://github.com/W4RRR/cachaza.git`. It never runs a merge, reset, or destructive Git command.
+### Preview a run
 
-## Quick start
-
-The default profile is passive:
-
-```bash
-cachaza plan -d example.com
-cachaza run -d example.com -o example-passive -format all -v
-```
-
-Preview all stages without running them:
+`plan` validates scope and prints the ordered workflow without executing pipeline stages or creating a run workspace:
 
 ```bash
 cachaza plan -d example.com -profile full
 ```
 
-Run the bounded safe profile after authorization:
+`-dry-run` creates the workspace, reports, artifact lists, and external command history without executing pipeline network or tool operations:
 
 ```bash
 cachaza run -d example.com \
-  -profile safe -active \
-  -o example-safe -format all -v
+  -profile full \
+  -active \
+  -dry-run \
+  -v \
+  -o example-full-plan
 ```
 
-Run the complete authorized workflow:
+## 🧭 Profiles
+
+| Profile | Direct contact | Authorization | Purpose | Main stages |
+|---|---:|---|---|---|
+| `passive` | No target application or network validation | None | Public OSINT, infrastructure context, and historical URLs | Corporate/ASN/tenant, CT/API, subdomains, Shodan/cloud, GAU |
+| `safe` | Yes | `-active` | Passive funnel plus bounded certificate, DNS, port, and HTTP validation | `passive` stages plus `certificates`, `dns`, `ports`, `http` |
+| `full` | Yes | `-active` | Safe reconnaissance plus endpoint mapping and focused WAF identification | `safe` stages plus `crawl`, `js`, `waf` |
+
+`passive` is the default. The exact stage order is defined in `src/cachaza/profiles.py`; in `full`, `http` runs before `waf` so confirmed live HTTP origins can be reused.
+
+The `full` profile:
+
+- includes GAU, crawling, JavaScript mapping, and focused WAF identification;
+- does not contain a general `nuclei` stage;
+- does not automatically select `bypass`, `policies`, or `cve`;
+- does not automatically enable `-harvester`, `-dns-enum`, or `-blw`.
+
+Use `-stages` to replace the profile stage list and `-skip-stages` to remove selected stages:
 
 ```bash
 cachaza run -d example.com \
-  -profile full -active \
-  -o example-full -format all -v
+  -stages http,gau,crawl,js,waf \
+  -active \
+  -o focused-web
 ```
 
-Maximum passive collection (no application/network scanning, but it can consume Shodan search credits):
+An explicit active stage still requires `-active`. `-stages nuclei` is rejected with guidance to use the WAF stage instead.
 
-```bash
-cachaza run -d example.com -profile passive -s -whois \
-  -shodan-mode search -shodan-pages 5 -shodan-max-queries 200 \
-  -api-config config/providers.env \
-  -o max-passive -format all -v
+## 🧱 Pipeline overview
+
+### Passive discovery
+
+| Stage | Purpose |
+|---|---|
+| `corporate` | Writes low-frequency corporate, BGP, registry, and verification handoffs. |
+| `asn` | Correlates DNS, BGP Toolkit, RIPEstat, ARIN RDAP, and optional ASNmap evidence. Domain-derived networks remain candidates. |
+| `tenant` | Discovers related Microsoft 365 domains without extending scope. |
+| `ct` | Queries Cert Spotter and `crt.sh` independently. |
+| `api` | Queries configured Censys Platform, IntelX Phonebook, and urlscan sources and records provider status. |
+| `subdomains` | Runs passive Subfinder, Assetfinder, or BBOT enumeration with source provenance. |
+| `shodan` | Generates signatures and optionally performs bounded count or search API requests. |
+| `cloud` | Classifies existing IP/CIDR evidence against public cloud ranges; it does not discover active scope. |
+| `gau` | Collects historical URLs and API-path hints; it does not mark them live. |
+
+### Authorized validation
+
+| Stage | Purpose |
+|---|---|
+| `certificates` | Uses Caduceus against explicitly authorized CIDRs. |
+| `dns` | Validates authorized names with dnsx. |
+| `ports` | Uses Naabu for authorized domains, Smap for passive Shodan-backed evidence, and optional Nmap for authorized CIDRs. |
+| `http` | Uses httpx to record live URLs, status, redirects, IPs, CNAMEs, CDN/ASN context, servers, and technologies. |
+| `active` | Compatibility stage for explicitly selected httpx, Naabu, Caduceus, or Nmap adapters. |
+
+### Web mapping and explicit correlation
+
+| Stage | Purpose |
+|---|---|
+| `crawl` | Runs bounded, FQDN-scoped Katana or endpoint-only Cariddi crawling. |
+| `js` | Extracts URLs, routes, related JavaScript, and API hints from JavaScript/source-map analysis. |
+| `waf` | Identifies WAF presence/vendor through wafw00f, the single Nuclei WAF template, and optional Nmap NSE. |
+| `bypass` | Records possible 403 bypass observations as candidates requiring manual validation. |
+| `policies` | Collects CSP observations and favicon fingerprints. |
+| `cve` | Correlates observed technologies with Vulnx as CVE candidates; it does not confirm vulnerability. |
+| `origin` | Collects and scores Origin candidates, with optional bounded Direct-origin validation. |
+
+### Focused add-ons
+
+| Stage or option | Purpose | Gate |
+|---|---|---|
+| `harvester` / `-harvester` | theHarvester organization, contact, host, API, and takeover evidence | `-active` |
+| `dns_enum` / `-dns-enum` | dnsenum/Fierce discovery and explicit AXFR observations | `-active` |
+| `blackwidow` / `-blw LEVEL` | BlackWidow crawling and Inject-X candidates at depth 1–10 | `-active` |
+| `wappalyzer` / `-wappalyzer` | Reuses httpx Wappalyzer fingerprints for technology evidence | `-active` |
+| `whois` / `-whois` | WHOIS enrichment once per unique public IP | None |
+
+Stages are fault-isolated unless `-strict` is selected. A compatible resumed workspace reuses cache-keyed successful stages from `rest/stages/`.
+
+## 🌐 Endpoint discovery
+
+```mermaid
+flowchart LR
+    GAU["GAU: historical URLs"] --> INV["Normalized endpoint inventory"]
+    KAT["Katana: live scoped crawling"] --> INV
+    CAR["Cariddi: endpoint-only extraction"] --> INV
+    JS["JSMap-Inspector: JavaScript routes"] --> INV
+    INV --> URLS["rest/urls.txt"]
+    INV --> ENDS["rest/endpoints.txt"]
+    INV --> API["rest/api-endpoints.txt"]
 ```
 
-Maximum authorized workflow, including every focused bundle and BlackWidow depth 4:
+| Source | Activity | Behavior |
+|---|---|---|
+| GAU | Passive | Preserves full historical URL, host, path, provenance, and API-path hints. |
+| Katana | Active | Crawls confirmed origins within FQDN scope, depth 3, with bounded rate/concurrency and JSONL status/method evidence. |
+| Cariddi | Active | Uses endpoint-only output (`-e -plain`) with concurrency 1; secret hunting (`-s`) is not enabled. |
+| JSMap-Inspector | Active | Extracts same-origin source-map URLs, routes, related JavaScript, and Swagger/OpenAPI/GraphQL-style API paths. |
 
-```bash
-cachaza run -d example.com -profile full -active -s \
-  -harvester -dns-enum -w -blw 4 -whois -wappalyzer \
-  -shodan-mode search -shodan-pages 5 -shodan-max-queries 200 \
-  -api-config config/providers.env \
-  -o max-everything -format all -v
+> [!NOTE]
+> A GAU result is historical evidence, not proof of a live URL. Live-origin selection requires httpx status evidence, a crawler 2xx/3xx response, or another validated HTTP response.
+
+Nuclei does not participate in endpoint discovery. The workspace normalizes and deduplicates endpoint URLs by:
+
+- retaining scheme, hostname, non-default port, and path;
+- removing fragments;
+- removing query values;
+- retaining unique query parameter names in sorted order.
+
+For example:
+
+```text
+https://example.com/search?q=term&page=2#results
+→ https://example.com/search?page&q
 ```
 
-The second command is deliberately noisy, can take a long time, consumes provider credits, crawls the site, and performs active candidate checks. Use it only with written authorization. `-profile full` already includes the focused `waf` stage with its safe default tools, so `-w` is redundant here but documents intent. The profile does not implicitly enable `-harvester`, `-dns-enum`, or `-blw`.
+`rest/api-endpoints.txt` includes explicit `api_endpoint` findings and URL findings marked as API endpoints by GAU, crawlers, or JavaScript analysis.
 
-## Automatic Origin discovery
-
-`-origin-auto` runs the complete Origin discovery pipeline without asking the operator to supply or approve individual IP addresses. Passive evidence is collected and normalized first; impossible, CDN, private, mail-only, and unrelated third-party candidates are rejected; remaining candidates receive a deterministic score. Direct-origin validation is permitted only after the engagement-wide `-active -authorized` acknowledgement.
-
-Balanced mode is the default:
+### Focused endpoint example
 
 ```bash
 cachaza run -d example.com \
-  -active -authorized \
-  -origin-auto -origin-mode balanced \
-  -o ./runs/example-origin
+  -stages http,gau,crawl,js \
+  -crawl-tools katana \
+  -active \
+  -format all \
+  -o example-endpoints
 ```
 
-Discovery-only mode does not contact candidate IP addresses and needs no active authorization gate:
+## 🛡️ WAF identification
+
+> [!NOTE]
+> Cachaza restricts Nuclei to `http/technologies/waf-detect.yaml`. It does not run general, CVE, exposure, login, CORS, misconfiguration, workflow, automatic-scan, or vulnerability templates.
+
+| Adapter | Selection | Behavior |
+|---|---|---|
+| wafw00f | Default | Broad WAF fingerprinting against one normalized HTTP origin at a time. |
+| Nuclei `waf-detect` | Default | Runs the immutable WAF template with rate, bulk size, and concurrency fixed at 1 and retries fixed at 0. |
+| Nmap NSE | Optional | Correlates `http-waf-detect` and intensive `http-waf-fingerprint` when `nmap` is explicitly added. |
+
+WAF targets are normalized to `scheme + hostname + effective port`:
+
+```text
+https://api.example.com/
+https://api.example.com/login
+https://api.example.com/v1/users?id=7
+https://api.example.com:443/swagger/
+→ https://api.example.com
+```
+
+Cachaza runs the WAF adapters once per deduplicated live HTTP origin, not once per endpoint. A non-standard port is retained only when httpx or a crawler confirms an HTTP(S) URL on that port. DNS records, Naabu services, Nmap services without URLs, and unverified historical URLs do not become WAF targets.
+
+When `waf` runs alone without live URL evidence, the conservative fallback is the root domain over HTTPS only. It does not invent HTTP or alternate-port variants.
+
+### Focused WAF example
 
 ```bash
 cachaza run -d example.com \
-  -origin-auto -origin-mode passive \
-  -o ./runs/example-origin-passive
+  -stages waf \
+  -waf-tools wafw00f,nuclei \
+  -active \
+  -format all \
+  -o example-waf
 ```
 
-Deep mode remains bounded to configured web ports, observed public paths, and a finite request budget:
+Add `nmap` only for explicit NSE correlation:
 
 ```bash
 cachaza run -d example.com \
-  -active -authorized \
-  -origin-auto -origin-mode deep \
+  -stages waf \
+  -waf-tools wafw00f,nuclei,nmap \
+  -active \
+  -o example-waf-nmap
+```
+
+WAF findings retain the target origin, vendor, source, confidence, and bounded evidence. Reports distinguish an identified vendor, a WAF with unknown vendor, and no observed WAF evidence. A negative result does not prove that no WAF is present.
+
+## 🕵️ Origin discovery
+
+Origin discovery is separate from the general active pipeline. It collects candidate IPs from existing evidence and configured sources, rejects unsuitable infrastructure, applies deterministic scores, and optionally performs low-impact Direct-origin validation.
+
+| Mode | Direct validation | Default boundary | Required gate |
+|---|---:|---|---|
+| `passive` | No | Collect and rank candidates only | None |
+| `balanced` | Yes | Up to 10 candidates, 40 total requests, ports 80/443 | `-active -authorized` |
+| `deep` | Yes | Up to 20 candidates, 100 total requests, bounded alternate web ports, optional JARM | `-active -authorized` |
+
+Disable direct validation in any mode with `-origin-no-direct-validation`.
+
+### Passive candidate discovery
+
+```bash
+cachaza run -d example.com \
+  -origin-auto \
+  -origin-mode passive \
+  -o example-origin-passive
+```
+
+### Authorized balanced validation
+
+```bash
+cachaza run -d example.com \
+  -origin-auto \
+  -origin-mode balanced \
+  -active \
+  -authorized \
+  -o example-origin
+```
+
+### Bounded deep validation
+
+```bash
+cachaza run -d example.com \
+  -origin-auto \
+  -origin-mode deep \
   -origin-max-auto-candidates 20 \
   -origin-max-requests 100 \
   -origin-rate-limit 1 \
   -origin-concurrency 2 \
-  -o ./runs/example-origin-deep
+  -active \
+  -authorized \
+  -o example-origin-deep
 ```
 
-Use `-origin-no-direct-validation` to force candidate discovery and ranking only. Use `-dry-run` to print the complete plan, authorization state, ports, candidate cap, rate limit, concurrency, and request budget without performing DNS, HTTP, TLS, API, or tool calls.
+### What Direct-origin validation checks
 
-The validator connects to the candidate IP but sends the target domain as TLS SNI and HTTP `Host`. It performs TCP connect checks only on the configured web ports, then HEAD and limited GET requests to `/`, an observed favicon, and a small number of already observed static resources. In deep mode, optional JARM correlation uses TLSX against one selected IP/port at a time with exact SNI, concurrency 1, zero retries, and the same finite activity budget; it is skipped when TLSX is unavailable. It never sends POST requests, trust-manipulation headers, performs path fuzzing, runs Nuclei against candidates, enumerates an ASN/CIDR, or attempts to defeat mTLS, Authenticated Origin Pulls, ACLs, or Tunnel.
+- TCP connectivity on the configured web ports.
+- TLS with the target hostname as SNI.
+- HTTP with the same hostname in `Host`.
+- HEAD and bounded GET requests to `/`, approved paths, and a small set of already observed favicon/static resources.
+- Correlation of status, redirects, stable headers, cookie names, title, body/static hashes, and certificate evidence.
+- Optional single-host JARM correlation through TLSX in deep mode.
 
-Every run writes the explainable Origin evidence under `rest/origin/`, including `public-baseline.json`, all/selected/rejected candidate JSONL files, validation results, network classifications, the persisted request budget, and final JSON/CSV rankings. A high-confidence result is a strong technical correlation, not proof of ownership or permission for further testing.
+### What it never does
 
-Cloudflare-specific interpretation follows the vendor's current documentation: a DNS-only record can reveal an actual origin address, proxied addresses are Cloudflare anycast edges, AOP adds client-certificate authentication, an origin firewall may accept only Cloudflare ranges, and Tunnel can operate without a publicly routable origin. See [Proxy status](https://developers.cloudflare.com/dns/proxy-status/), [exposed IP addresses](https://developers.cloudflare.com/dns/manage-dns-records/troubleshooting/exposed-ip-address/), [Cloudflare IP addresses](https://developers.cloudflare.com/fundamentals/concepts/cloudflare-ip-addresses/), [Authenticated Origin Pulls](https://developers.cloudflare.com/ssl/origin-configuration/authenticated-origin-pull/explanation/), and [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/).
+- Send POST requests, authentication, forged client-IP headers, or origin-bypass headers.
+- Run Nuclei, Arjun, fuzzing, exploitation, SSRF, or proxy-based checks against a candidate.
+- Scan an entire inferred CIDR or ASN.
+- Attempt to bypass mTLS, Authenticated Origin Pulls, ACLs, or Tunnel controls.
+- Invent an origin when evidence is insufficient or no public origin exists.
 
-## Profiles
+> [!NOTE]
+> A high-confidence Origin result is a technical correlation. It is not proof of ownership, scope, or permission for additional testing.
 
-| Profile | Direct contact | Ordered stages |
-|---|---:|---|
-| `passive` | No application/network scanning | `corporate`, `asn`, `tenant`, `ct`, `api`, `subdomains`, `shodan`, `cloud`, `gau` |
-| `safe` | Yes; requires `-active` | Passive funnel plus `certificates`, `dns`, `ports`, and `http` |
-| `full` | Yes; requires `-active` | Safe reconnaissance plus GAU, endpoint crawling, JavaScript endpoint mapping, and focused WAF identification. |
+Origin artifacts are stored under `rest/origin/`, including the public baseline, all/selected/rejected candidates, validation evidence, network classification, request budget, and final JSON/CSV ranking. Response bodies are stored only when `-origin-save-bodies` is explicit.
 
-Choose the profile according to the engagement boundary:
+Cloudflare deployments require careful interpretation: proxied DNS returns edge addresses; an origin ACL may allow only Cloudflare ranges; Authenticated Origin Pulls may require a client certificate; and Cloudflare Tunnel may expose no public origin at all. See Cloudflare's documentation for [proxy status](https://developers.cloudflare.com/dns/proxy-status/), [exposed IP addresses](https://developers.cloudflare.com/dns/manage-dns-records/troubleshooting/exposed-ip-address/), [IP ranges and origin ACLs](https://developers.cloudflare.com/fundamentals/concepts/cloudflare-ip-addresses/), [Authenticated Origin Pulls](https://developers.cloudflare.com/ssl/origin-configuration/authenticated-origin-pull/explanation/), and [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/).
 
-- **`passive`** is the default. It collects public OSINT, Certificate Transparency, historical URLs, tenant relationships, infrastructure, and passive subdomains without directly probing the target application or network.
-- **`safe`** starts with the passive funnel, then performs bounded certificate, DNS, port, and HTTP validation. It must be explicitly authorized with `-active`.
-- **`full`** includes everything in `safe`, then adds historical URL discovery, endpoint crawling, JavaScript endpoint mapping, and focused WAF identification. It also requires `-active`. It does not run the explicit `bypass`, `policies`, or `cve` stages automatically.
+The complete scoring and evidence model is documented in [docs/METHODOLOGY.md](docs/METHODOLOGY.md).
 
-`-stages` replaces the selected profile's stage list. `-skip-stages` removes specific stages while preserving the remaining order.
+## 🎯 Scope and authorization
 
-```bash
-cachaza run -d example.com -stages asn,ct,api,subdomains,gau -o focused
-cachaza run -d example.com -profile full -active -skip-stages js -o full-without-js
-```
+| Input | Scope effect |
+|---|---|
+| `-d example.com` | Authorizes the root domain and non-excluded subdomains, not related apex domains or infrastructure. |
+| `-cidr 192.0.2.0/28` | Explicitly authorizes addresses inside the CIDR, minus exclusions. |
+| `-a AS64500` | Treats that ASN as explicit input and may mark its discovered prefixes in scope; use only when the ASN is part of written scope. |
+| `-org "Example Organization"` | Adds an intelligence hint; it does not authorize inferred networks. |
+| `-exclude-domain` / `-exclude-cidr` | Removes values from the applicable scope. |
 
-Any explicit active stage still requires `-active`, even when selected through `-stages`.
-
-## Pipeline stages
-
-| Stage | Type | Purpose |
-|---|---|---|
-| `corporate` | Passive/manual | Writes low-frequency OSINT and verification handoffs. |
-| `asn` | Passive | Resolves domains and correlates BGP Toolkit, RIPEstat, ARIN RDAP, and optional ASNmap data. |
-| `tenant` | Passive | Preserves tenant-related domains as candidates pending scope approval. |
-| `ct` | Passive | Queries Cert Spotter and `crt.sh` independently. |
-| `api` | Passive | Searches Censys Platform, IntelX Phonebook, and urlscan without submitting scans; writes per-provider execution status. |
-| `certificates` | Active | Uses Caduceus only against explicitly authorized CIDRs. |
-| `subdomains` | Passive | Uses Subfinder, Assetfinder, or passive BBOT modules and retains provider provenance. |
-| `dns` | Active | Validates in-scope names with dnsx and normalizes A, AAAA, and CNAME evidence. |
-| `dns_enum` | Active/optional | Runs dnsenum and Fierce for authorized DNS discovery; successful AXFR is recorded as a high-risk normalized finding. |
-| `harvester` | Active/optional | Runs theHarvester's source, Shodan, API endpoint, and takeover workflow and extracts normalized contact/surface data. |
-| `blackwidow` | Active/optional | Runs BlackWidow at the requested depth with crawling and Inject-X, then normalizes URLs, subdomains, APIs, contacts, forms, and manual-validation candidates. |
-| `waf` | Active | Runs wafw00f and the single Nuclei WAF template per unique live authorized HTTP origin; Nmap NSE is optional. |
-| `shodan` | Passive | Generates signatures and optionally performs bounded count/search API calls. |
-| `ports` | Mixed | Uses Naabu/Nmap for authorized probes and Smap for Shodan-backed observations. |
-| `http` | Active | Probes approved names/services with httpx and records status, server, ASN, CNAME, CDN, IP, and technology evidence. |
-| `cloud` | Passive | Classifies existing IP/CIDR findings against provider ranges; never expands scope. |
-| `bypass` | Active | Tests observed in-scope HTTP 403 URLs and records possible bypasses as candidates. |
-| `gau` | Passive | Collects archived URLs with host, path, historical source, and API-endpoint hints; archived URLs are not treated as live. |
-| `crawl` | Active | Runs scoped Katana or endpoint-only Cariddi discovery without fuzzing, payloads, or secret hunting. |
-| `js` | Active | Extracts related URLs, API routes, JavaScript files, and Swagger/OpenAPI/GraphQL references with the bundled same-origin `JSMap-Inspector` CLI. |
-| `policies` | Active | Collects CSP observations and favicon fingerprints. |
-| `cve` | Passive correlation after active fingerprinting | Correlates observed technologies with Vulnx; results are candidates, not confirmed vulnerabilities. |
-
-The compatibility stage `active` remains available for focused httpx/Naabu/Caduceus/Nmap runs, but named stages are preferred for new workflows.
-
-## Scope
-
-A domain is sufficient for passive discovery:
-
-```bash
-cachaza run -d example.com
-```
-
-Explicit network inputs authorize only those values:
-
-```bash
-cachaza run \
-  -d example.com \
-  -asn AS64500 \
-  -cidr 192.0.2.0/28 \
-  -exclude-domain dev.example.com \
-  -exclude-cidr 192.0.2.8/29 \
-  -profile safe -active
-```
+Domain-derived ASNs, prefixes, cloud ranges, CDN addresses, Shodan matches, tenant domains, historical IPs, and registry data remain candidate evidence. They do not enter general active stages automatically.
 
 For larger engagements, use a target file:
 
@@ -273,321 +429,267 @@ exclude-cidr: 192.0.2.8/29
 ```
 
 ```bash
-cachaza run -targets-file scope.txt -profile safe -active
+cachaza run \
+  -targets-file scope.txt \
+  -profile safe \
+  -active \
+  -o example-scope
 ```
 
-Automatically discovered prefixes and provider IPs remain `in_scope: false` unless they were explicitly authorized.
+`-active` authorizes direct-contact stages against the explicit scope. `-authorized` is an additional acknowledgement for automatic Direct-origin validation; it does not broaden the general pipeline.
 
-## Credentials and passive providers
+> [!WARNING]
+> `-allow-large-ranges` bypasses the configured active host-count limit and requires `-active`. Use it only when the complete range is explicitly authorized and the engagement can safely absorb the traffic.
 
-Credentials may be exported normally or loaded from a data-only file. Cachaza parses `KEY=value` lines and never executes the file.
+## 🔑 Credentials and providers
+
+Cachaza accepts exported environment variables or a data-only `KEY=value` file. The file is parsed; it is never executed.
 
 ```bash
 cp config/providers.example.env config/providers.env
 chmod 600 config/providers.env
-cachaza run -d example.com -api-config config/providers.env -o example-passive
+
+cachaza doctor -api-config config/providers.env
+cachaza run -d example.com \
+  -api-config config/providers.env \
+  -o example-passive
 ```
 
-Core variables include:
+Common variables include:
 
-```bash
-export PDCP_API_KEY='...'
-export SHODAN_API_KEY='...'
-export CERTSPOTTER_API_KEY='...'
-export CENSYS_API_KEY='...'
-export CENSYS_ORG_ID='...'
-export INTELX_API_KEY='...'
-export URLSCAN_API_KEY='...'
-export VT_API_KEY='...'             # optional historical DNS for Origin discovery
-```
+| Variable | Used for |
+|---|---|
+| `PDCP_API_KEY` | ProjectDiscovery services such as optional ASNmap/provider integration |
+| `SHODAN_API_KEY` | Shodan count/search and supported adapters |
+| `CERTSPOTTER_API_KEY` | Optional authenticated Cert Spotter access |
+| `CENSYS_API_KEY` | Native Censys Platform global-search PAT |
+| `CENSYS_ORG_ID` | Optional native Censys organization context |
+| `INTELX_API_KEY` | IntelX Phonebook and supported provider configuration |
+| `URLSCAN_API_KEY` | urlscan search |
+| `VT_API_KEY` | Optional VirusTotal historical DNS for Origin discovery |
+| `SECURITYTRAILS_API_KEY` | Optional SecurityTrails/Origin evidence |
 
-`CENSYS_API_KEY` is the Censys Platform PAT used by Cachaza's native API stage; `CENSYS_ORG_ID` is optional. theHarvester's older Censys connector instead expects a separate `CENSYS_API_ID` plus `CENSYS_API_SECRET`. Do not copy the same PAT into all three fields.
+The full supported set is documented in `config/providers.example.env`. `CENSYS_API_KEY` is the native Platform PAT; theHarvester's legacy connector uses the separate `CENSYS_API_ID` and `CENSYS_API_SECRET` pair.
 
-IntelX and ZoomEye normally need only `INTELX_API_KEY` and `ZOOMEYE_API_KEY`; their host fields are optional overrides. Cachaza sends supported values from `providers.env` to Subfinder and creates a private temporary theHarvester `api-keys.yaml` for each execution, then removes it. This fixes the common situation where keys were present in `providers.env` but theHarvester ignored them because it only read `~/.theHarvester/api-keys.yaml`.
+> [!WARNING]
+> Provider coverage depends on credentials, account permissions, indexing, and quotas. `-shodan-mode count` avoids search-result credits; `search` retrieves results and may consume credits. `doctor` confirms that a value is present, not that the provider accepts it.
 
-`cachaza doctor -api-config config/providers.env` checks whether values are present, but presence is not proof that a provider accepts them. Each real run writes `rest/api/provider-status.json`, including the HTTP status, whether the failure is transient, and a concrete corrective action.
-
-- Censys `401`: the Platform PAT is invalid or expired. Regenerate it and put it only in `CENSYS_API_KEY`; the legacy `CENSYS_API_ID`/`CENSYS_API_SECRET` pair is a different credential type. Organization users must also have the Censys API Access role. `CENSYS_ORG_ID` remains optional.
-- Censys `403`: the credential was accepted, but the account, organization, role, or subscription does not permit Global Search.
-- IntelX `401`: verify that `INTELX_API_KEY` belongs to the configured `INTELX_HOST`, has not expired, and that the account includes Phonebook API access.
-- `crt.sh` `502`: this is a transient upstream gateway failure, not evidence of a bad local key, VPN MTU, or Cachaza configuration. Cachaza continues with Cert Spotter and does not repeatedly retry the failed request.
-- `tenant-domains` nonzero exit: Cachaza now prints the exit code even when the tool produces no diagnostic and retains stdout/stderr in `rest/tenant-domains/`.
-
-Censys is primarily infrastructure search, so a valid Censys run is not expected to discover every public email. IntelX/theHarvester may also return zero emails because of plan coverage or provider indexing.
+Each run records native provider outcomes and safe diagnostics under `rest/api/provider-status.json`. Missing tools or credentials can produce an incomplete inventory without invalidating evidence collected from other sources.
 
 ## VPN-safe network policy
 
-Cachaza enforces a product-wide ceiling of **2 request/packet starts per second** and **2 concurrent network workers**. Native HTTP sources share one process-wide limiter. For Subfinder, dnsx, Katana, httpx, Naabu, Nmap, Caduceus, and TLSx, Cachaza also rewrites their native rate/concurrency arguments so a higher caller-provided value cannot escape the ceiling. Nuclei is more restrictive: its only permitted WAF command is forced to `-rl 1 -bulk-size 1 -c 1 -retries 0`. Common subprocess worker-pool environment variables and simultaneous child-process starts are capped at two as an additional safeguard.
+Cachaza enforces a product-wide ceiling of two request/packet starts per second and two concurrent network workers for its native operations. Supported external commands are rewritten where their CLI exposes relevant controls:
 
-The CLI rejects `-jobs`, `-rate-limit`, subdomain, or Origin values above two instead of silently accepting an unsafe configuration. Nuclei has no user-configurable template, tag, severity, rate, or concurrency options. Colors are enabled by default even when output is piped through `tee`; use either `-nc` or `-no-color` to disable ANSI colors in the console and `report.txt`.
+- Subfinder and dnsx rate/threads are capped at 2.
+- Katana rate, concurrency, and parallelism are capped at 2.
+- httpx, Naabu, Nmap, Caduceus, and TLSX receive bounded native options.
+- Common subprocess worker-pool environment variables are forced to 2.
+- Nuclei is stricter: rate, bulk size, and concurrency are fixed at 1, with zero retries and one WAF template.
 
-Some independent upstream programs do not expose a trustworthy requests-per-second option. Cachaza can bound their process scheduling and common runtime worker pools, but it cannot inspect arbitrary internal schedulers. For a strict auditable engagement, select only adapters with native limits. Naabu, httpx, dnsx, Subfinder, and Katana are explicitly capped; Nuclei is limited to one WAF template against one normalized origin per process invocation.
+The CLI rejects `-jobs`, `-rate-limit`, subdomain, or Origin limits above 2 instead of accepting an unsafe value.
 
-These controls reduce burst load but do not change interface MTU. If the VPN still drops at two requests per second, measure the tunnel path MTU separately and adjust the VPN interface/MSS; a `502` from one public API is not an MTU diagnosis.
+Some third-party programs do not expose a trustworthy requests-per-second option. Cachaza can bound process starts and common worker pools but cannot inspect every upstream internal scheduler. Select adapters with native limits when a strict traffic contract is required.
 
-## Active controls
+These controls reduce burst load; they do not alter tunnel MTU or TCP MSS. If a VPN still drops at low request rates, diagnose path MTU and tunnel configuration separately.
 
-The hard defaults can only be tightened per engagement:
+## Active controls and focused bundles
 
-```bash
-cachaza run -d example.com \
-  -profile full -active \
-  -ports 80,443,8080,8443 \
-  -rate-limit 2 \
-  -max-active-hosts 256 \
-  -max-crawl-urls 25 \
-  -o authorized-run -format all
-```
-
-Useful selectors:
-
-```bash
--port-tools naabu,smap        # naabu,smap,nmap
--crawl-tools auto             # auto,katana,cariddi
--waf-tools wafw00f,nuclei     # add nmap only for explicit NSE correlation
-```
-
-`JSMap-Inspector` is bundled with Cachaza because the similarly named upstream project is an offline HTML interface, not an automatable CLI. `cachaza doctor -install` also installs a pinned, request-limited CSP Stalker wrapper. Use `-jsmap-path` or `-csp-stalker-path` only to select an explicitly installed compatible replacement.
-
-### What the `ports` stage does
-
-`ports` requires `-active` and starts from normalized findings that are already in scope:
-
-1. It writes authorized domain targets to `rest/port-targets.txt` and records any over-limit/unauthorized networks in `rest/port-networks-skipped.txt`.
-2. Naabu actively probes only the configured `-ports` on those authorized domains, at no more than 2 packets per second with 2 workers. Open endpoints become normalized `service` findings.
-3. Smap performs a passive Shodan-backed lookup when `SHODAN_API_KEY` is configured. It does not replace the active Naabu result.
-4. Optional Nmap runs only against explicitly authorized CIDRs that pass the active-range safety checks, with `--max-rate 2 --max-parallelism 2` added automatically.
-5. The following `http` stage consumes the discovered domains/services and performs bounded HTTP fingerprinting; `ports` itself does not run vulnerability templates.
-
-The default selector is `-port-tools naabu,smap`; Nmap runs only when explicitly included with `-port-tools ... ,nmap`. With `-v`, Cachaza prints the selected adapters, ports, target counts, and the enforced network ceiling at the start of the stage.
-
-## Focused discovery bundles
-
-These switches add one focused stage to the selected profile. `-w`, `-harvester`, `-dns-enum`, and `-blw` contact the target or its DNS service and therefore require the explicit `-active` authorization gate. `-s` uses passive providers and does not require it.
-
-| Shortcut | Long option | Tools and concrete behavior | Normalized output |
-|---|---|---|---|
-| `-w` | `-waf` | Runs `wafw00f URL -a` and only Nuclei's `http/technologies/waf-detect.yaml` template at `-rl 1 -bulk-size 1 -c 1 -retries 0`. Nmap's `http-waf-detect` and intensive `http-waf-fingerprint` scripts run only when `nmap` is explicitly added to `-waf-tools`. | Deduplicated `waf` findings that retain target origin, vendor, source, confidence, and bounded evidence. |
-| `-harvester` | - | Runs theHarvester per root with Shodan, API scanning, takeover checks, and `-b all`; `-harvester-dns-server` supplies the optional `-e` value. | Emails, phones, addresses, hosts, URLs, API endpoints, IPs, and redacted API-key candidates. |
-| `-dns-enum` | - | Runs `dnsenum DOMAIN` and `fierce -dns DOMAIN`, saves raw output separately, and correlates names and addresses. | Deduplicated domains/IPs plus a high-visibility `dns_zone_transfer` finding if AXFR succeeds. |
-| `-s` | `-subdomains` | Ensures both `assetfinder --subs-only DOMAIN` and rate-limited Subfinder (`-all -rl 1 -t 1`) are selected. | In-scope domain findings with source/provider provenance. |
-| `-blw LEVEL` | - | Runs `blackwidow -l LEVEL -v y -s y -u https://DOMAIN/`. LEVEL is 1-10. If absent, Cachaza downloads a pinned copy to the user's Cachaza data directory; no internal `sudo` prompt is used. | Deduplicated URLs, dynamic/API endpoints, subdomains, emails, phones, forms, and Inject-X output marked as unconfirmed/manual-validation evidence. |
-
-Run all focused bundles (BlackWidow depth 4):
+The global limits can be tightened for an engagement:
 
 ```bash
 cachaza run -d example.com \
-  -s -harvester -dns-enum -w -blw 4 -active \
-  -o focused-example -format all -v
-```
-
-### Endpoint reconnaissance
-
-The `full` profile orders `http` before `waf` and obtains endpoint evidence from GAU, Katana or Cariddi, JavaScript analysis, and existing passive sources:
-
-```bash
-cachaza run \
-  -d example.com \
   -profile full \
   -active \
+  -ports 80,443,8080,8443 \
+  -rate-limit 1 \
+  -max-active-hosts 256 \
+  -max-crawl-urls 25 \
   -format all \
-  -o example-recon
-
-cachaza run \
-  -d example.com \
-  -stages http,gau,crawl,js,waf \
-  -crawl-tools katana \
-  -waf-tools wafw00f,nuclei \
-  -active \
-  -format all \
-  -o example-endpoints
+  -o example-controlled
 ```
 
-GAU records remain historical until another source confirms a live response. Katana remains FQDN-scoped and bounded. Cariddi uses endpoint discovery only (`-e -plain`) and never enables its `-s` secret-hunting mode. JavaScript analysis extracts related files, URLs, routes, and Swagger/OpenAPI/GraphQL references; strings such as `token`, `password`, or `secret` are not promoted to security findings by this flow.
+| Shortcut | Activity | Effect |
+|---|---|---|
+| `-s` / `-subdomains` | Passive | Ensures Subfinder and Assetfinder are selected. |
+| `-w` / `-waf` | Active | Adds focused WAF identification. It is already present in `full`. |
+| `-harvester` | Active | Adds theHarvester organization, contact, host, API, and takeover evidence. |
+| `-dns-enum` | Active | Adds dnsenum and Fierce with explicit AXFR reporting. |
+| `-blw LEVEL` | Active | Adds BlackWidow at depth 1–10; Inject-X output remains candidate evidence. |
+| `-wappalyzer` | Active | Adds httpx technology fingerprints without a duplicate probe when httpx already ran. |
+| `-whois` | Passive/public lookup | Enriches each unique public IP once. |
 
-### WAF correlation
+All active bundles require written authorization and `-active`. The `full` profile already contains `waf`, but it does not implicitly enable theHarvester, DNS enumeration, or BlackWidow.
 
-```bash
-cachaza run -d example.com -w -active -o example-waf -format all
-cachaza run -d example.com -w -active -waf-tools wafw00f,nuclei -o example-waf
-cachaza run \
-  -d example.com \
-  -stages waf \
-  -waf-tools nuclei \
-  -active \
-  -format all \
-  -o example-waf
-```
+## 📊 Reports and workspace
 
-The third command is the only Nuclei behavior available in Cachaza: one immutable WAF template, one request per second, one host per batch, one concurrent template, and zero retries. The former general `nuclei` stage and all tag/severity controls have been removed. `-stages nuclei` returns an actionable error instead of silently changing behavior.
+Default runs write JSON and TXT reports. Use `-format all` for every supported format:
 
-WAF targets are deduplicated by `scheme + hostname + effective port`, never by individual path. Default ports are collapsed (`https://example.com:443/login` becomes `https://example.com`); a non-standard port is retained only after httpx or a crawler confirms a live HTTP(S) URL. GAU history, DNS records, Naabu services, and Nmap services do not become Nuclei targets. If `waf` runs alone without live URL evidence, the only fallback is `https://ROOT_DOMAIN`.
-
-Nuclei is restricted to the single WAF detection template. Cachaza does not use Nuclei for vulnerability scanning or endpoint discovery.
-
-Cachaza invokes `nmap` directly, not through `sudo`, because an internal privilege prompt would break unattended runs. Start Cachaza from an appropriately privileged shell if the local Nmap configuration needs elevated access. A product name reported by multiple tools is presented once in the key summary while every source-specific observation remains in the evidence records.
-
-### theHarvester organization and contact discovery
-
-```bash
-cachaza run -d example.com -harvester -active \
-  -harvester-source all \
-  -harvester-limit 500 \
-  -harvester-dns-server 1.1.1.1 \
-  -o example-harvester -format all
-```
-
-The generated command is equivalent to:
-
-```bash
-theHarvester -d example.com -l 500 -s -a -t -b all -e 1.1.1.1 -f OUTPUT_BASE
-```
-
-theHarvester requires a value after `-e`; Cachaza omits that flag unless `-harvester-dns-server` is set. Saved JSON is parsed structurally. Possible keys/tokens are represented only by a redacted SHA-256 fingerprint and marked `candidate` for manual validation; the summary never prints the raw value.
-
-Cachaza also requests at most 12 already discovered contact/legal pages sequentially (plus the root page), extracting visible `mailto:`, `tel:`, Cloudflare-obfuscated emails, JSON-LD postal addresses, and conservative visible-text matches. This is why public details present on `/contacto/`, `/terminos-de-uso/`, or `/politica-de-privacidad/` can now appear even when a provider returns no emails.
-
-### BlackWidow
-
-```bash
-cachaza run -d example.com -blw 2 -active -o example-blackwidow -format all -v
-cachaza run -d example.com -blw 4 -blackwidow-path /opt/BlackWidow/blackwidow -active -o example-blackwidow
-```
-
-`-blw 2` maps to BlackWidow's actual value-taking interface: `blackwidow -l 2 -v y -s y -u https://example.com/`. Upstream `-v` and `-s` are not bare switches. `-s y` enables Inject-X checks, so Cachaza always requires `-active`. Raw stdout/stderr and discovered files are retained under `rest/blackwidow/`; normalized results flow into every report. Any possible SQLi/XSS/traversal/redirect line is labelled `candidate` and `requires_manual_validation`.
-
-### DNS enumeration and zone transfer
-
-```bash
-cachaza run -d example.com -dns-enum -active -o example-dns -format all
-cachaza run -d example.com -dns-enum -active -dns-enum-tools dnsenum -o dnsenum-only
-```
-
-Raw outputs live under `rest/dns-enum/`. If either tool reports a successful AXFR, the terminal summary prints `Zone transfer allowed: ALLOWED`, the normalized finding carries `risk: high`, and every selected report repeats the warning. Failure/refusal messages do not create a false positive.
-
-### Passive subdomain enumeration
-
-```bash
-cachaza run -d example.com -s -o example-subs -format all
-cachaza run -d example.com -s -subdomain-rate-limit 1 -subdomain-threads 1 -o example-subs
-```
-
-`-subdomain-tools auto` remains available. `-s` simply makes the two-tool Subfinder + Assetfinder choice explicit. Names are normalized, restricted to the requested roots/exclusions, and deduplicated in reports while source-level provenance remains intact.
-
-## Reports and workspace
-
-Supported formats are `html`, `json`, `txt`, `pdf`, `csv`, and `all`:
-
-```bash
-cachaza run -d example.com -o example-report -format html,json,pdf
-cachaza run -d example.com -o example-report -format all
-```
-
-Every format receives the same normalized data and executive categories: WAFs, API-key/secret candidates, API endpoints, subdomains, emails, phones, addresses, and successful DNS zone transfers. The console and executive views show at most 13 subdomains followed by `more on reports`; the complete list remains available in the detailed reports and `rest/subdomains.txt`.
-
-The HTML report is the recommended primary result because it provides the richest reporting experience: searchable normalized evidence, expandable details, filters, summaries, and the interactive relationship explorer. At the end of every run, Cachaza prints the exact `report.html` path and recommends opening it. Generate it with `-format html` or `-format all`, then open the path shown by Cachaza; on Kali, for example:
-
-```bash
-xdg-open ./output/example-report/report.html
-```
-
-- **HTML:** self-contained, searchable evidence and relationship graph. Hovering a node immediately updates the right-hand inspector; clicking pins the node so its details return after hover ends.
-- **JSON:** lossless scope, findings, metadata, stage state, graph, network intelligence, and `key_findings` object for automation.
-- **CSV:** one normalized row per finding with spreadsheet formula prefixes neutralized.
-- **TXT:** color-aware terminal report with executive summary, key findings, full inventory, stages, and evidence.
-- **PDF:** designed for sharing: branded cover, metric cards, key-findings dashboard, explicit scope, infrastructure tables, execution status, normalized inventory, page headers/footers, and a detailed evidence appendix. The PDF appendix is capped at 300 rows; JSON/CSV remain the lossless formats for larger runs.
-
-Untrusted values are escaped, HTML carries a restrictive Content Security Policy, candidate secrets are redacted, and spreadsheet formula prefixes are neutralized in CSV.
-
-Important workspace files:
-
-| Path | Content |
+| Format | Content |
 |---|---|
-| `report.*` | Selected reports in the workspace root. |
-| `rest/findings.jsonl` | Canonical append-only normalized evidence. |
-| `rest/scope.json` | Exact requested scope and exclusions. |
-| `rest/manifest.json` | Version, profile, stage states, counts, and command history. |
-| `rest/api/provider-status.json` | Native Censys/IntelX/urlscan request status and safe diagnostics; never contains configured API keys. |
-| `rest/stages/*.json` | Completed stage checkpoints. |
-| `rest/domains.txt`, `rest/services.txt` | Derived convenience views, not separate sources of truth. |
-| `rest/urls.txt` | Complete in-scope URLs as observed by their source. |
-| `rest/endpoints.txt` | Deduplicated endpoint URLs without fragments or query values; sorted parameter names are retained. |
-| `rest/api-endpoints.txt` | Explicit API findings plus URL findings marked as API endpoints by GAU, crawlers, or JavaScript analysis. |
-| `rest/wafs.txt` | One tab-separated `origin`, `vendor`, `source` row per retained WAF observation. |
-| `rest/security-findings.txt`, `rest/cve-candidates.txt` | Human-readable filtered views. |
+| HTML | Self-contained searchable evidence, filters, expandable metadata, and relationship graph |
+| JSON | Lossless scope, findings, graph, network intelligence, stages, and executive categories |
+| TXT | Terminal-friendly summary, inventory, stages, and evidence |
+| CSV | One normalized row per finding with spreadsheet formula-prefix neutralization |
+| PDF | Shareable summary, scope, infrastructure tables, stages, inventory, and bounded evidence appendix |
 
-Reusing a compatible `-o` workspace resumes it automatically. Use `-resume` when the workspace must already exist, or `-fresh` to reset only a verified workspace whose saved scope matches the current request.
+```bash
+cachaza run -d example.com \
+  -format all \
+  -o example-run
+```
+
+The resulting layout is:
+
+```text
+output/example-run/
+├── report.html
+├── report.json
+├── report.txt
+├── report.pdf
+├── report.csv
+└── rest/
+    ├── findings.jsonl
+    ├── manifest.json
+    ├── scope.json
+    ├── urls.txt
+    ├── endpoints.txt
+    ├── api-endpoints.txt
+    ├── wafs.txt
+    ├── api/
+    ├── origin/
+    └── stages/
+```
+
+Only selected report formats appear. Artifact directories such as `api/` or `origin/` are present only when the related workflow writes them. Convenience lists are derived from `rest/findings.jsonl`.
+
+Security-sensitive report handling includes HTML escaping, restrictive Content Security Policy, inert embedded JSON, secret redaction where supported, and CSV formula-injection neutralization.
+
+### Resume and fresh runs
+
+Reusing a compatible `-o` workspace continues it automatically. `-resume` requires that the workspace already exists; `-fresh` resets only a recognizable Cachaza workspace whose saved scope matches the current request.
 
 ```bash
 cachaza run -d example.com -profile passive -o example-run
-cachaza run -d example.com -profile passive -o example-run -resume
-cachaza run -d example.com -profile passive -o example-run -fresh
+cachaza run -d example.com -profile full -active -o example-run -resume
 ```
 
-Changing scope is rejected to prevent evidence from unrelated engagements being mixed.
+Changing scope in an existing workspace is rejected to prevent evidence from unrelated engagements being mixed.
 
-## Commands
+## Command reference
 
-| Command | What it does concretely |
+| Command | Purpose |
 |---|---|
-| `cachaza run` | Builds or resumes a scoped workspace, executes the ordered profile/stage funnel, normalizes and deduplicates evidence, saves raw artifacts and checkpoints, and exports the selected reports. Direct-contact stages remain blocked without `-active`. |
-| `cachaza plan` | Validates scope and prints the exact ordered workflow, profile, active boundaries, and automatic discovery behavior. It performs no network/tool execution and creates no files; `-json` makes the plan machine-readable. |
-| `cachaza signatures` | Produces named Karma/Shodan queries from domains, organization hints, and optional SHA-1 certificate fingerprints. It can write `name::query` text or JSONL and does not spend Shodan search credits. |
-| `cachaza normalize` | Reads arbitrary text/JSON from files or stdin, extracts syntactically valid domains, converts case/wildcards/URLs to canonical names, optionally filters them under one or more roots, deduplicates, sorts, and writes plain lines. |
-| `cachaza monitor` | Watches Certificate Transparency for new in-scope names. `auto` prefers streaming Gungnir when suitable; otherwise Cachaza polls Cert Spotter + crt.sh, persists seen-state, supports `-once`, and prints only newly observed names. |
-| `cachaza doctor` | Checks every optional executable plus provider credential presence. `-api-config FILE` includes a data-only provider file; `-install` installs every absent tool with an approved Go, pipx, or pinned Cachaza user-space recipe. Credential acceptance is verified only by a real provider request. |
+| `cachaza run` | Execute a profile or explicit stage list and write a workspace. |
+| `cachaza plan` | Validate scope and show ordered stages without network calls or files. |
+| `cachaza signatures` | Build Karma/Shodan queries from domains, organizations, or certificate fingerprints. |
+| `cachaza normalize` | Extract, validate, filter, sort, and deduplicate domains from text or JSON. |
+| `cachaza monitor` | Monitor Certificate Transparency through Gungnir or Cert Spotter/`crt.sh` polling. |
+| `cachaza doctor` | Report optional tool paths and credential presence; optionally install supported tools. |
+
+Useful option groups:
+
+| Purpose | Options |
+|---|---|
+| Core inputs | `-d`, `-a`, `-org`, `-cidr`, `-targets-file`, exclusions |
+| Profiles and stages | `-profile`, `-stages`, `-skip-stages` |
+| Authorization and safety | `-active`, `-authorized`, `-rate-limit`, `-jobs`, `-max-active-hosts` |
+| Output and state | `-o`, `-format`, `-resume`, `-fresh`, `-dry-run`, `-strict` |
+| Endpoint mapping | `-crawl-tools`, `-max-crawl-urls`, `-jsmap-path` |
+| WAF identification | `-w`, `-waf-tools` |
+| Origin discovery | `-origin-auto`, `-origin-mode`, `-origin-no-direct-validation`, bounded `-origin-*` controls |
+| Providers | `-api-config`, `-shodan-mode`, `-shodan-pages`, `-shodan-max-queries` |
+| Diagnostics and updates | `doctor`, `doctor -install`, `-version`, `-up`, `-update` |
+
+Both single- and double-dash option spellings are accepted. Consult the live CLI for the complete reference:
 
 ```bash
-cachaza -help
-cachaza doctor
-cachaza doctor -api-config config/providers.env
-cachaza doctor -install
+cachaza --help
+cachaza run --help
+cachaza doctor --help
 ```
-
-`cachaza -h` now includes both the command overview and the complete `run` option reference. `cachaza run -h` remains available as the shorter run-only view.
-
-Output controls:
-
-```bash
-cachaza run -d example.com -v
-cachaza run -d example.com -vv
-cachaza run -d example.com -silent
-cachaza run -d example.com -no-color
-cachaza run -d example.com -dry-run
-```
-
-Global options shown by `cachaza -h`:
-
-| Option | Specific behavior |
-|---|---|
-| `-h`, `-help` | At the top level, prints the command overview and every `run` option in one combined reference; on a selected subcommand, prints that command's help. |
-| `-v`, `-verbose` | Streams external tool output and prints every normalized finding; repeat as `-vv` to include normalized metadata. |
-| `-q`, `-silent` | Suppresses the banner, startup version check/prompt, progress, verbose findings, report paths, and final key summary. Report files are still generated normally. |
-| `-nc`, `-no-color` | Disables ANSI styling in the terminal and `report.txt`; it does not remove visual styling from HTML/PDF. |
-| `-version` | Prints the installed Cachaza version and exits. |
-| `-up`, `-update` | Runs the explicit update/reinstall workflow, then verifies the version and executes `doctor`. It cannot be combined with another command. |
 
 ## Optional tools
 
-Cachaza remains usable when optional binaries are absent; affected stages are isolated and skipped unless `-strict` is selected. Run `cachaza doctor -install` to fill all supported user-space dependencies, then `cachaza doctor` to verify them. Kali packages that require apt/sudo remain an explicit administrator action. See [docs/OPTIONAL_TOOLS.md](docs/OPTIONAL_TOOLS.md) for recipes and compatibility notes.
+Cachaza runs available adapters and records missing components through `doctor`. External tools are not Python core requirements.
 
-## Development
+| Purpose | Tools |
+|---|---|
+| Network context | ASNmap, WHOIS |
+| Subdomains | Subfinder, Assetfinder, BBOT |
+| DNS | dnsx, dnsenum, Fierce, optional PureDNS |
+| Ports | Naabu, Nmap, Smap |
+| HTTP | httpx |
+| Crawling | Katana, Cariddi, BlackWidow |
+| WAF | wafw00f, Nuclei WAF template, optional Nmap NSE |
+| JavaScript | Bundled `JSMap-Inspector` CLI |
+| Origin correlation | AlterX, PureDNS/dnsx, Uncover, optional TLSX/JARM |
+| Organization/contact | theHarvester |
+| Policy/fingerprint | CSP-Stalker, Favicorn |
+
+`cachaza doctor -install` installs absent tools for which Cachaza has an approved user-space recipe:
+
+- Go binaries are placed in `~/.local/bin` when Go is available.
+- BBOT and wafw00f are installed through pipx.
+- Pinned BlackWidow and CSP-Stalker copies are installed under the user's Cachaza data directory.
+- The bundled source-map analyzer is exposed as `JSMap-Inspector`.
+- Existing executables are not replaced.
+
+Nmap, WHOIS, Smap, Gungnir, Favicorn, theHarvester, dnsenum, Fierce, and other Kali/system tools remain explicit administrator or specialist installations.
+
+See [docs/OPTIONAL_TOOLS.md](docs/OPTIONAL_TOOLS.md) for installation recipes, pinned revisions, and adapter interfaces.
+
+## Updating Cachaza
+
+The aliases `cachaza -up` and `cachaza -update` run the same conservative update workflow.
+
+- From a Git checkout, Cachaza runs `git pull --ff-only origin main`, then reinstalls the checkout with `pipx install --force .`.
+- Without a checkout, it reinstalls from `git+https://github.com/W4RRR/cachaza.git` through pipx.
+- After installation, it prints the version and runs `cachaza doctor` when the executable is visible on `PATH`.
+- The workflow does not run `git reset`, force-push, or a non-fast-forward merge.
 
 ```bash
-python3 -m venv .venv
+cachaza -up
+cachaza -update
+```
+
+Both commands are equivalent.
+
+Normal CLI invocations check the latest public version at most once every 24 hours and cache the result. An interactive terminal can accept an update prompt; non-interactive runs print guidance and continue. Disable that network check and cache access in controlled or offline environments with:
+
+```bash
+export CACHAZA_SKIP_UPDATE_CHECK=1
+```
+
+## 🧪 Development and testing
+
+Python 3.11 or newer is required. The `dev` extra includes pytest:
+
+```bash
+git clone https://github.com/W4RRR/cachaza.git
+cd cachaza
+
+python -m venv .venv
 source .venv/bin/activate
-python -m pip install -e '.[dev]'
+python -m pip install -e ".[dev]"
 python -m pytest -q
 ```
 
-The test suite also runs without pytest-specific features:
+Before submitting changes:
 
 ```bash
-python -m unittest discover -s tests -v
+python -m pytest -q
+git diff --check
+grep -RIn "nuclei" README.md docs src tests
 ```
 
-See [docs/METHODOLOGY.md](docs/METHODOLOGY.md) for the workflow and safety model, and [docs/MIGRATION.md](docs/MIGRATION.md) for migration from the earlier Bash workflow.
+Tests use temporary workspaces, mocks, dry runs, and simulated adapter output for behavior that must not contact real targets. Keep new network-facing tests isolated in the same way.
 
 ## Contributing
 
-Issues and pull requests are welcome at [W4RRR/cachaza](https://github.com/W4RRR/cachaza). Preserve provenance, keep passive collection conservative, and never promote inferred third-party infrastructure into active scope automatically.
+Keep changes scoped, preserve passive-first defaults, and add tests for new parsing, safety, scope, or command behavior. Update the README and the relevant document under `docs/` when a user-visible workflow changes.
+
+Do not commit provider credentials, generated workspaces, or report artifacts. Review `git diff --check` and run the complete test suite before opening a pull request.
+
+## 📄 License
+
+Cachaza is released under the [MIT License](LICENSE).
