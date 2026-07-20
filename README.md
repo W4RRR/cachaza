@@ -6,6 +6,26 @@
 [![Platform](https://img.shields.io/badge/platform-Kali%20Linux-557C94.svg)](https://www.kali.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
+```text
+                             .-========-.
+                              \   o   /
+                               \     /
+                                `---'
+                                  ||
+                                  ||
+                                __||__
+                               /______\
+
+_________     _____  _________   ___ ___    _____  __________  _____
+\_   ___ \   /  _  \ \_   ___ \ /   |   \  /  _  \ \____    / /  _  \
+/    \  \/  /  /_\  \/    \  \//    ~    \/  /_\  \  /     / /  /_\  \
+\     \____/    |    \     \___\    Y    /    |    \/     /_/    |    \
+ \______  /\____|__  /\______  /\___|_  /\____|__  /_______ \____|__  /
+        \/         \/        \/       \/         \/        \/       \/
+                   github.com/W4RRR/cachaza by W4RRR
+                                v0.10.2
+```
+
 Cachaza turns an explicitly defined domain or network scope into a reproducible reconnaissance workspace. It collects passive intelligence first, applies scope decisions to every observation, and requires explicit authorization before direct-contact stages run.
 
 All observations use one normalized evidence model with source, scope, metadata, and timestamp. Cachaza then produces machine-readable inventories and self-contained reports without treating candidate findings as confirmed vulnerabilities.
