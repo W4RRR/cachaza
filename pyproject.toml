@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cachaza"
+version = "0.10.2"
+description = "Passive-first OSINT and authorized reconnaissance orchestrator for Kali Linux"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Cachaza contributors" }]
+dependencies = [
+  "cryptography>=42.0",
+  "dnspython>=2.6",
+  "mmh3>=4.1",
+  "reportlab>=4.0",
+]
+keywords = ["osint", "recon", "security", "kali", "attack-surface"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Topic :: Security",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+cachaza = "cachaza.cli:main"
+JSMap-Inspector = "cachaza.jsmap_cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
