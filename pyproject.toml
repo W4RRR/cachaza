@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cachaza"
-version = "0.10.5"
+version = "0.10.6"
 description = "Passive-first OSINT and authorized reconnaissance orchestrator for Kali Linux"
 readme = "README.md"
 requires-python = ">=3.11"

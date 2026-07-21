@@ -23,7 +23,7 @@ _________     _____  _________   ___ ___    _____  __________  _____
  \______  /\____|__  /\______  /\___|_  /\____|__  /_______ \____|__  /
         \/         \/        \/       \/         \/        \/       \/
                    github.com/W4RRR/cachaza by W4RRR
-                                v0.10.5
+                                v0.10.6
 ```
 
 Cachaza turns an explicitly defined domain or network scope into a reproducible reconnaissance workspace. It collects passive intelligence first, applies scope decisions to every observation, and requires explicit authorization before direct-contact stages run.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from html import escape
 from typing import Any
 
@@ -155,31 +156,144 @@ def render_html(data: dict[str, Any]) -> str:
         )
         for kind, count in data["counts"].items()
     ) or '<button class="stat" type="button" data-kind="" aria-pressed="false"><span>0</span>findings</button>'
-    key_labels = (
-        ("wafs", "WAFs"),
-        ("api_key_candidates", "API key/secret candidates"),
-        ("api_endpoints", "API endpoints"),
-        ("subdomains", "Actionable subdomains"),
-        ("emails", "Emails"),
-        ("phones", "Phones"),
-        ("addresses", "Addresses"),
-        ("zone_transfer_allowed", "Zone transfer allowed"),
-    )
     key_findings = data.get("key_findings", {})
-    key_rows: list[list[str]] = []
-    for key, label in key_labels:
+    waf_entries: list[str] = []
+    for entry in key_findings.get("wafs", []):
+        vendor, separator, raw_origins = str(entry).partition(" @ ")
+        qualifier = "Observed"
+        if vendor.endswith("]") and " [" in vendor:
+            vendor, raw_qualifier = vendor.rsplit(" [", 1)
+            qualifier = raw_qualifier[:-1].replace(";", " ·").title()
+        origins: list[str] = []
+        more_origins = 0
+        if separator:
+            more_match = re.search(r"\s+\(\+(\d+) more origins\)$", raw_origins)
+            if more_match:
+                more_origins = int(more_match.group(1))
+                raw_origins = raw_origins[: more_match.start()]
+            origins = [value for value in raw_origins.split(", ") if value]
+        origin_rows = "".join(
+            f'<li class="key-list-item"><code>{escape(origin)}</code></li>'
+            for origin in origins
+        )
+        if more_origins:
+            origin_rows += (
+                f'<li class="key-list-more">+{more_origins} additional origins in the full evidence</li>'
+            )
+        waf_entries.append(
+            '<article class="waf-entry">'
+            f'<div class="waf-entry-head"><strong>{escape(vendor)}</strong>'
+            f'<span class="key-status {"candidate" if "Candidate" in qualifier else "observed"}">'
+            f'{escape(qualifier)}</span></div>'
+            + (f'<ul class="key-list">{origin_rows}</ul>' if origin_rows else '<p class="key-empty">Origin not recorded</p>')
+            + "</article>"
+        )
+    waf_values = list(key_findings.get("wafs", []))
+    waf_body = (
+        '<div class="waf-grid">' + "".join(waf_entries) + "</div>"
+        if waf_entries
+        else '<p class="key-empty">No WAF evidence observed.</p>'
+    )
+
+    subdomain_summary = data.get("subdomain_summary", {})
+    actionable = list(key_findings.get("subdomains", []))
+    live_http = [
+        item for item in subdomain_summary.get("live_http", []) if isinstance(item, dict)
+    ]
+    dns_only = [str(value) for value in subdomain_summary.get("dns_only", [])]
+    remaining_slots = 13
+    live_rows: list[str] = []
+    for item in live_http[:remaining_slots]:
+        host = str(item.get("host") or "-")
+        statuses = [str(value) for value in item.get("statuses", [])]
+        status_text = " · ".join(f"HTTP {value}" for value in statuses) or "HTTP responsive"
+        live_rows.append(
+            '<li class="subdomain-item">'
+            f'<code>{escape(host)}</code><span class="key-status live">{escape(status_text)}</span>'
+            "</li>"
+        )
+    remaining_slots -= len(live_rows)
+    dns_rows = [
+        '<li class="subdomain-item">'
+        f'<code>{escape(host)}</code><span class="key-status dns">DNS resolved</span></li>'
+        for host in dns_only[:remaining_slots]
+    ]
+    remaining_slots -= len(dns_rows)
+    represented = {str(item.get("host") or "") for item in live_http} | set(dns_only)
+    passive = [value for value in actionable if value not in represented]
+    passive_rows = [
+        '<li class="subdomain-item">'
+        f'<code>{escape(host)}</code><span class="key-status passive">Passive candidate</span></li>'
+        for host in passive[:remaining_slots]
+    ]
+    shown_actionable = len(live_rows) + len(dns_rows) + len(passive_rows)
+
+    def subdomain_group(label: str, rows: list[str], count: int) -> str:
+        if not rows:
+            return ""
+        return (
+            '<div class="subdomain-group">'
+            f'<h4>{escape(label)} <span>{count}</span></h4>'
+            f'<ul class="subdomain-list">{"".join(rows)}</ul></div>'
+        )
+
+    subdomain_body = "".join(
+        (
+            subdomain_group("HTTP-responsive", live_rows, len(live_http)),
+            subdomain_group("DNS-only", dns_rows, len(dns_only)),
+            subdomain_group("Passive-only", passive_rows, len(passive)),
+        )
+    )
+    if actionable:
+        hidden_actionable = max(0, len(actionable) - shown_actionable)
+        subdomain_body = '<div class="subdomain-grid">' + subdomain_body + "</div>"
+        if hidden_actionable:
+            subdomain_body += (
+                f'<p class="key-more-note">+{hidden_actionable} actionable subdomains remain in the full evidence.</p>'
+            )
+    else:
+        subdomain_body = '<p class="key-empty">No actionable subdomains were validated.</p>'
+
+    omitted = len(subdomain_summary.get("omitted", []))
+    if omitted:
+        subdomain_body += (
+            f'<p class="key-omitted">{omitted} unverified or wildcard-like candidates were omitted from highlights and the graph.</p>'
+        )
+
+    other_cards: list[str] = []
+    for key, label, empty_text in (
+        ("api_endpoints", "API endpoints", "No endpoints observed"),
+        ("api_key_candidates", "API key/secret candidates", "No candidates observed"),
+        ("emails", "Emails", "No addresses observed"),
+        ("phones", "Phones", "No numbers observed"),
+        ("addresses", "Physical addresses", "No addresses observed"),
+        ("zone_transfer_allowed", "Zone transfer", "Not observed"),
+    ):
         values = list(key_findings.get(key, []))
-        limit = 13 if key == "subdomains" else 8
-        shown = values[:limit]
-        suffix = f" (+{len(values) - limit} more on reports)" if len(values) > limit else ""
-        if key == "zone_transfer_allowed":
-            rendered = "ALLOWED: " + ", ".join(shown) if shown else "Not observed"
-        elif key == "wafs" and not shown:
-            rendered = "No evidence observed"
-        else:
-            rendered = ", ".join(shown) if shown else "-"
-        key_rows.append([label, str(len(values)), rendered + suffix])
-    key_table = _table(["Category", "Count", "Highlights"], key_rows)
+        shown = values[:8]
+        value_rows = "".join(
+            f'<li class="key-list-item"><code>{escape(str(value))}</code></li>'
+            for value in shown
+        )
+        if len(values) > len(shown):
+            value_rows += f'<li class="key-list-more">+{len(values) - len(shown)} more in the full evidence</li>'
+        state_class = " danger" if key == "zone_transfer_allowed" and values else ""
+        other_cards.append(
+            f'<article class="key-card key-card-compact{state_class}">'
+            f'<header class="key-card-head"><h3>{escape(label)}</h3><span class="key-count">{len(values)}</span></header>'
+            + (f'<ul class="key-list">{value_rows}</ul>' if value_rows else f'<p class="key-empty">{escape(empty_text)}</p>')
+            + "</article>"
+        )
+
+    key_cards = (
+        '<div class="key-findings-layout">'
+        '<article class="key-card key-card-wide">'
+        f'<header class="key-card-head"><h3>WAF observations</h3><span class="key-count">{len(waf_values)}</span></header>{waf_body}</article>'
+        '<article class="key-card key-card-wide">'
+        f'<header class="key-card-head"><h3>Actionable subdomains</h3><span class="key-count">{len(actionable)}</span></header>{subdomain_body}</article>'
+        + "".join(other_cards)
+        + "</div>"
+    )
     zone_values = list(key_findings.get("zone_transfer_allowed", []))
     zone_warning = (
         '<div class="zone-warning"><strong>ZONE TRANSFER ALLOWED:</strong> '
@@ -226,11 +340,12 @@ main{max-width:1280px;margin:auto;padding:38px 24px 70px}header{border:1px solid
 .zone-warning{margin:12px 0;border:1px solid #ff5d6c;border-left:5px solid #ff5d6c;border-radius:9px;background:rgba(197,50,65,.18);color:#ffd8dc;padding:11px 13px}
 .section{margin-top:16px;border:1px solid var(--line);border-radius:14px;background:var(--panel);overflow:hidden}.section>summary{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 18px;cursor:pointer;font-size:18px;font-weight:700;list-style:none}.section>summary::-webkit-details-marker{display:none}.section>summary::after{content:"+";color:var(--accent);font-size:24px}.section[open]>summary::after{content:"−"}.section-body{padding:0 18px 18px}.section-note{margin:0;color:var(--muted)}
 .table-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px}table{width:100%;border-collapse:collapse;background:var(--panel)}th,td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--blue);font-size:12px;text-transform:uppercase;letter-spacing:.08em}tr:last-child td{border-bottom:0}.empty{color:var(--muted)}code{color:var(--accent);overflow-wrap:anywhere}
+.key-findings-layout{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:14px}.key-card{min-width:0;border:1px solid var(--line);border-radius:12px;background:linear-gradient(145deg,rgba(16,34,57,.86),rgba(10,24,41,.94));padding:14px}.key-card-wide{grid-column:1/-1}.key-card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.key-card-head h3{margin:0;color:var(--text);font-size:14px}.key-count{display:inline-grid;place-items:center;min-width:28px;height:24px;border:1px solid rgba(112,176,255,.35);border-radius:999px;background:rgba(36,93,145,.25);color:var(--blue);padding:0 8px;font-size:12px;font-weight:800}.waf-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.waf-entry{min-width:0;border:1px solid rgba(121,160,205,.22);border-radius:10px;background:rgba(7,20,33,.6);padding:11px}.waf-entry-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px}.waf-entry-head strong{overflow-wrap:anywhere}.key-status{display:inline-flex;align-items:center;flex:0 0 auto;border:1px solid var(--line);border-radius:999px;padding:2px 7px;color:var(--muted);font-size:10px;white-space:nowrap}.key-status.observed,.key-status.live{border-color:rgba(83,211,164,.45);background:rgba(83,211,164,.1);color:var(--accent)}.key-status.candidate,.key-status.passive{border-color:rgba(255,184,107,.48);background:rgba(255,184,107,.1);color:#ffc783}.key-status.dns{border-color:rgba(112,176,255,.45);background:rgba(112,176,255,.1);color:var(--blue)}.key-list,.subdomain-list{display:grid;gap:6px;margin:0;padding:0;list-style:none}.key-list-item,.subdomain-item{min-width:0;border-radius:8px;background:rgba(7,20,33,.68);padding:7px 9px}.key-list-item code,.subdomain-item code{display:block;color:#dceafa;white-space:normal;word-break:break-word}.key-list-more{color:var(--muted);padding:3px 9px;font-size:11px}.subdomain-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.subdomain-group{min-width:0}.subdomain-group h4{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 7px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em}.subdomain-group h4 span{color:var(--text)}.subdomain-item{display:flex;align-items:center;justify-content:space-between;gap:10px}.subdomain-item code{min-width:0}.key-empty{margin:0;color:var(--muted)}.key-more-note,.key-omitted{margin:10px 0 0;border-radius:8px;padding:8px 10px;color:var(--muted);font-size:12px}.key-more-note{background:rgba(112,176,255,.08)}.key-omitted{border-left:3px solid #f6b94a;background:rgba(246,185,74,.08);color:#d8c49d}.key-card.danger{border-color:rgba(255,93,108,.62);background:rgba(197,50,65,.13)}
 .controls{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:14px}.field{display:grid;gap:5px;min-width:210px;flex:1}.field span{color:var(--muted);font-size:12px}.field input,.field select,.action{min-height:42px;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--text);padding:8px 11px}.action{cursor:pointer;flex:0}.action:hover{border-color:var(--accent)}
 .evidence-status{margin:0 0 10px;color:var(--muted)}.finding{border-top:1px solid var(--line)}.finding:first-child{border-top:0}.finding>summary{display:grid;grid-template-columns:minmax(88px,.55fr) minmax(220px,2.5fr) minmax(120px,1fr) auto;gap:12px;align-items:center;padding:12px 2px;cursor:pointer}.finding-kind{color:var(--blue);font-size:12px;text-transform:uppercase;letter-spacing:.06em}.finding-value{overflow-wrap:anywhere}.badge{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 8px;color:var(--muted);font-size:12px}.badge.scope{color:var(--accent);border-color:var(--accent)}.finding-body{padding:0 2px 15px 100px}.metadata{display:grid;grid-template-columns:minmax(130px,.5fr) minmax(200px,2fr);gap:0;border:1px solid var(--line);border-radius:9px;overflow:hidden}.metadata dt,.metadata dd{margin:0;padding:8px 11px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.metadata dt{color:var(--muted);background:var(--soft)}.metadata dd{white-space:pre-wrap}.metadata dt:last-of-type,.metadata dd:last-of-type{border-bottom:0}
 .graph-shell{position:relative;margin-top:14px;border:1px solid #294566;border-radius:18px;overflow:hidden;background:linear-gradient(145deg,#0d1e33,#0a1728);box-shadow:0 24px 70px rgba(0,0,0,.22)}
 .graph-toolbar{display:grid;grid-template-columns:minmax(220px,1fr) auto;gap:12px;align-items:center;padding:14px;border-bottom:1px solid rgba(121,160,205,.2);background:rgba(8,20,35,.74);backdrop-filter:blur(16px)}.graph-search{position:relative;display:flex;align-items:center;max-width:460px}.graph-search::before{content:"⌕";position:absolute;left:13px;color:var(--blue);font-size:20px}.graph-search input{width:100%;height:42px;border:1px solid #315173;border-radius:11px;background:#071523;color:var(--text);padding:8px 38px 8px 38px}.graph-search input::placeholder{color:#7188a4}.graph-search-clear{position:absolute;right:6px;width:30px;height:30px;border:0;border-radius:8px;background:transparent;color:var(--muted);cursor:pointer}.graph-search-clear:hover{background:var(--soft);color:var(--text)}
-.graph-actions{display:flex;align-items:center;justify-content:flex-end;gap:7px;flex-wrap:wrap}.graph-action,.layout-button{height:38px;min-width:38px;border:1px solid #315173;border-radius:10px;background:#0b1a2b;color:var(--text);padding:0 11px;cursor:pointer}.graph-action:hover,.layout-button:hover,.layout-button[aria-pressed="true"]{border-color:var(--blue);background:#132a44;color:#fff}.graph-action:active,.layout-button:active{transform:translateY(1px)}.layout-switch{display:inline-flex;padding:3px;border:1px solid #294867;border-radius:11px;background:#071523}.layout-button{height:30px;border:0;background:transparent;color:var(--muted);padding:0 10px}.layout-button[aria-pressed="true"]{background:#1d4f7b;color:#fff}.zoom-range{width:96px;accent-color:var(--blue)}.zoom-value{min-width:46px;color:var(--muted);font-size:12px;text-align:center}
+.graph-actions{display:flex;align-items:center;justify-content:flex-end;gap:7px;flex-wrap:wrap}.graph-action,.layout-button{height:38px;min-width:38px;border:1px solid #315173;border-radius:10px;background:#0b1a2b;color:var(--text);padding:0 11px;cursor:pointer}.graph-action:hover,.layout-button:hover,.layout-button[aria-pressed="true"]{border-color:var(--blue);background:#132a44;color:#fff}.graph-action:active,.layout-button:active{transform:translateY(1px)}.layout-switch{display:inline-flex;padding:3px;border:1px solid #294867;border-radius:11px;background:#071523}.layout-button{height:30px;border:0;background:transparent;color:var(--muted);padding:0 10px}.layout-button[aria-pressed="true"]{background:#1d4f7b;color:#fff}.graph-range-control{display:inline-flex;align-items:center;gap:6px;height:38px;border:1px solid #294867;border-radius:10px;background:#071523;padding:0 9px}.graph-range-label{color:var(--muted);font-size:11px}.zoom-range,.spacing-range{width:96px;accent-color:var(--blue)}.spacing-range{accent-color:var(--accent)}.zoom-value,.spacing-value{min-width:42px;color:var(--muted);font-size:12px;text-align:center}.spacing-value{color:var(--accent)}
 .graph-status-strip{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid rgba(121,160,205,.16);background:rgba(12,31,52,.65)}.graph-metric{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(112,176,255,.22);border-radius:999px;padding:4px 9px;color:var(--muted);font-size:12px}.graph-metric strong{color:var(--text)}.graph-selection-status{margin-left:auto;color:var(--blue);font-size:12px;overflow-wrap:anywhere}
 .graph-layout{display:grid;grid-template-columns:minmax(0,1fr) 310px;min-height:680px}.graph-canvas{position:relative;min-width:0;height:680px;overflow:hidden;background:radial-gradient(circle at 18% 15%,rgba(37,91,142,.34),transparent 34%),radial-gradient(circle at 80% 75%,rgba(83,211,164,.12),transparent 30%),#071421;isolation:isolate}.graph-canvas::before{content:"";position:absolute;inset:0;pointer-events:none;background-image:radial-gradient(rgba(123,165,211,.22) 1px,transparent 1px);background-size:24px 24px;mask-image:linear-gradient(to bottom,rgba(0,0,0,.8),transparent 94%)}#relationship-graph{position:relative;z-index:1;display:block;width:100%;height:680px;touch-action:none;cursor:grab;user-select:none}#relationship-graph.is-panning{cursor:grabbing}
 .graph-help{position:absolute;z-index:2;left:14px;bottom:14px;max-width:520px;border:1px solid rgba(112,176,255,.2);border-radius:10px;background:rgba(5,15,26,.82);color:#94a9c1;padding:7px 10px;font-size:11px;pointer-events:none;backdrop-filter:blur(10px)}.graph-tooltip{position:absolute;z-index:6;display:none;width:min(300px,calc(100% - 24px));border:1px solid #41678e;border-radius:13px;background:rgba(8,21,36,.96);box-shadow:0 16px 45px rgba(0,0,0,.42);padding:12px;pointer-events:none;backdrop-filter:blur(14px)}.graph-tooltip.visible{display:block}.tooltip-kind{color:var(--blue);font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase}.tooltip-title{margin-top:3px;color:#fff;font-weight:700;overflow-wrap:anywhere}.tooltip-meta{margin-top:7px;color:var(--muted);font-size:12px}
@@ -238,17 +353,17 @@ main{max-width:1280px;margin:auto;padding:38px 24px 70px}header{border:1px solid
 .edge{fill:none;stroke:#42617e;stroke-width:1.35;opacity:.38;vector-effect:non-scaling-stroke;transition:opacity .18s,stroke .18s,stroke-width .18s}.edge.active{stroke:#78d8ff;stroke-width:2.8;opacity:1;filter:drop-shadow(0 0 5px rgba(112,176,255,.65))}.edge.dim,.edge.filtered{opacity:.035}.edge-label{fill:#d6e7f7;font-size:10px;font-weight:700;paint-order:stroke;stroke:#071421;stroke-width:4px;stroke-linejoin:round;pointer-events:none;opacity:0}.edge-label.active{opacity:1}.edge-label.filtered{display:none}
 .node-card{cursor:pointer;outline:none;transition:opacity .18s}.node-card .node-position{transition:transform .45s cubic-bezier(.2,.8,.2,1)}.node-card.dim{opacity:.12}.node-card.filtered{display:none}.node-card.match .node-halo{opacity:.85;stroke-width:4}.node-card.active .node-halo{opacity:1;stroke:#fff;stroke-width:4;filter:drop-shadow(0 0 12px rgba(112,176,255,.9))}.node-card.related .node-halo{opacity:.78}.node-halo{fill:rgba(5,16,28,.9);stroke-width:2.5;opacity:.58;vector-effect:non-scaling-stroke;transition:all .18s}.node-core{stroke:rgba(255,255,255,.65);stroke-width:1.5;vector-effect:non-scaling-stroke}.node-icon{fill:#fff;font-size:11px;font-weight:900;text-anchor:middle;dominant-baseline:central;pointer-events:none}.node-info-bg{fill:rgba(9,25,42,.94);stroke:#345473;stroke-width:1;vector-effect:non-scaling-stroke;filter:drop-shadow(0 6px 8px rgba(0,0,0,.25))}.node-title{fill:#eff7ff;font-size:11px;font-weight:700}.node-meta{fill:#8fa8c2;font-size:8.5px;text-transform:uppercase}.node-scope{stroke:none}.node-card:hover .node-info-bg,.node-card:focus .node-info-bg{stroke:#70b0ff;stroke-width:1.8}.node-card:hover .node-halo{opacity:1}.zoomed-out .node-info{opacity:0;pointer-events:none}.zoomed-out .node-card.active .node-info,.zoomed-out .node-card.related .node-info,.zoomed-out .node-card.match .node-info{opacity:1}.cluster-label{fill:#9fb5ca;font-size:12px;font-weight:800;letter-spacing:.1em;text-anchor:middle;text-transform:uppercase;paint-order:stroke;stroke:#071421;stroke-width:5px}.cluster-orbit{fill:rgba(18,43,70,.18);stroke:rgba(112,176,255,.18);stroke-width:1.2;stroke-dasharray:4 8;vector-effect:non-scaling-stroke}
 .legend{display:flex;gap:7px;flex-wrap:wrap;padding:12px 14px;border-top:1px solid rgba(121,160,205,.18);background:rgba(8,20,35,.78)}.legend-item{display:inline-flex;align-items:center;gap:7px;border:1px solid #294866;border-radius:999px;background:#0a192a;color:var(--muted);padding:5px 9px;cursor:pointer;font-size:11px}.legend-item:hover,.legend-item[aria-pressed="true"]{border-color:#70b0ff;background:#132a44;color:#fff}.legend-item[aria-pressed="false"]{opacity:.42}.legend-dot{width:10px;height:10px;border-radius:4px;box-shadow:0 0 10px currentColor}.graph-shell.is-expanded{position:fixed;z-index:1000;inset:10px;margin:0;background:#071421}.graph-shell.is-expanded .graph-canvas,.graph-shell.is-expanded #relationship-graph{height:calc(100vh - 190px)}.graph-shell.is-expanded .graph-layout{min-height:calc(100vh - 190px)}body.graph-expanded{overflow:hidden}
-@media(max-width:900px){.graph-toolbar{grid-template-columns:1fr}.graph-actions{justify-content:flex-start}.graph-search{max-width:none}.graph-layout{grid-template-columns:1fr}.graph-inspector{border-left:0;border-top:1px solid var(--line);max-height:380px}.graph-selection-status{width:100%;margin-left:0}.graph-canvas,#relationship-graph{height:580px}.graph-layout{min-height:0}}
-@media(max-width:760px){main{padding:20px 12px 44px}header{padding:22px 18px}.stat{min-width:calc(50% - 6px);flex:1}.finding>summary{grid-template-columns:85px 1fr}.finding-source,.finding>summary .badge{display:none}.finding-body{padding-left:2px}.metadata{grid-template-columns:1fr}.metadata dt{border-bottom:0}.graph-canvas,#relationship-graph{height:480px}.zoom-range,.zoom-value{display:none}.graph-help{right:12px}.graph-action,.layout-button{padding:0 8px}.graph-shell.is-expanded{inset:0;border-radius:0}.graph-shell.is-expanded .graph-canvas,.graph-shell.is-expanded #relationship-graph{height:calc(100vh - 235px)}}
-@media(prefers-color-scheme:light){:root{--bg:#f5f8fc;--panel:#fff;--soft:#edf4fb;--line:#c8d5e4;--text:#102238;--muted:#526a83;--accent:#087a5b;--blue:#176fc1}header{background:linear-gradient(135deg,#e8f2ff,#f7fbff)}.callout{background:#eaf8f1}.graph-shell{background:#f7fbff;box-shadow:0 18px 50px rgba(56,90,122,.18)}.graph-toolbar,.graph-status-strip,.legend{background:rgba(240,247,253,.94)}.graph-search input,.graph-action,.layout-switch,.legend-item{background:#fff;color:var(--text)}.graph-canvas{background:radial-gradient(circle at 20% 10%,#d9ebfa,transparent 38%),#f7fbff}.graph-inspector{background:#f0f6fc}.graph-help,.graph-tooltip{background:rgba(255,255,255,.96);color:var(--muted)}.tooltip-title{color:var(--text)}.node-info-bg{fill:rgba(255,255,255,.97);stroke:#9bb4cc}.node-title{fill:#102238}.node-meta{fill:#526a83}.edge-label{fill:#284b6c;stroke:#f7fbff}.cluster-label{fill:#526a83;stroke:#f7fbff}.relation-item{background:#fff}.source-pill{background:#e1edf8;color:#34506b}}
+@media(max-width:900px){.key-findings-layout{grid-template-columns:repeat(2,minmax(0,1fr))}.waf-grid,.subdomain-grid{grid-template-columns:1fr}.graph-toolbar{grid-template-columns:1fr}.graph-actions{justify-content:flex-start}.graph-search{max-width:none}.graph-layout{grid-template-columns:1fr}.graph-inspector{border-left:0;border-top:1px solid var(--line);max-height:380px}.graph-selection-status{width:100%;margin-left:0}.graph-canvas,#relationship-graph{height:580px}.graph-layout{min-height:0}}
+@media(max-width:760px){main{padding:20px 12px 44px}header{padding:22px 18px}.stat{min-width:calc(50% - 6px);flex:1}.key-findings-layout{grid-template-columns:1fr}.key-card-wide{grid-column:auto}.subdomain-item{align-items:flex-start;flex-direction:column;gap:5px}.finding>summary{grid-template-columns:85px 1fr}.finding-source,.finding>summary .badge{display:none}.finding-body{padding-left:2px}.metadata{grid-template-columns:1fr}.metadata dt{border-bottom:0}.graph-canvas,#relationship-graph{height:480px}.zoom-control{display:none}.graph-help{right:12px}.graph-action,.layout-button{padding:0 8px}.graph-shell.is-expanded{inset:0;border-radius:0}.graph-shell.is-expanded .graph-canvas,.graph-shell.is-expanded #relationship-graph{height:calc(100vh - 235px)}}
+@media(prefers-color-scheme:light){:root{--bg:#f5f8fc;--panel:#fff;--soft:#edf4fb;--line:#c8d5e4;--text:#102238;--muted:#526a83;--accent:#087a5b;--blue:#176fc1}header{background:linear-gradient(135deg,#e8f2ff,#f7fbff)}.callout{background:#eaf8f1}.key-card{background:#f8fbff}.waf-entry,.key-list-item,.subdomain-item{background:#fff}.graph-shell{background:#f7fbff;box-shadow:0 18px 50px rgba(56,90,122,.18)}.graph-toolbar,.graph-status-strip,.legend{background:rgba(240,247,253,.94)}.graph-search input,.graph-action,.layout-switch,.graph-range-control,.legend-item{background:#fff;color:var(--text)}.graph-canvas{background:radial-gradient(circle at 20% 10%,#d9ebfa,transparent 38%),#f7fbff}.graph-inspector{background:#f0f6fc}.graph-help,.graph-tooltip{background:rgba(255,255,255,.96);color:var(--muted)}.tooltip-title{color:var(--text)}.node-info-bg{fill:rgba(255,255,255,.97);stroke:#9bb4cc}.node-title{fill:#102238}.node-meta{fill:#526a83}.edge-label{fill:#284b6c;stroke:#f7fbff}.cluster-label{fill:#526a83;stroke:#f7fbff}.relation-item{background:#fff}.source-pill{background:#e1edf8;color:#34506b}}
 .node-position{transition:none!important}.node-count-bg{fill:#071421;stroke:rgba(255,255,255,.8);stroke-width:1.2;vector-effect:non-scaling-stroke}.node-count{fill:#fff;font-size:7px;font-weight:900;text-anchor:middle;dominant-baseline:central;pointer-events:none}.zoomed-out .node-card.related .node-info{opacity:0}
 @media(prefers-color-scheme:light){.zone-warning{background:#fff0f1;color:#8f2530}}
 </style></head><body><main>
 <header><div class="eyebrow">Passive-first reconnaissance</div><h1>Cachaza</h1><p>__DOMAINS__</p><p class="muted">Generated __GENERATED__ &middot; version __VERSION__</p><div class="stats" aria-label="Finding counts. Select a type to filter the evidence below.">__COUNTS__</div></header>
 <div class="callout"><strong>Scope guard:</strong> __SCOPE_NOTE__</div>
-<details class="section" open id="key-findings-section"><summary>Key findings</summary><div class="section-body"><p class="section-note">__SUBDOMAIN_NOTE__ Actionable subdomains are capped at 13 here; complete evidence remains in JSON/CSV.</p>__ZONE_WARNING____KEY_FINDINGS__</div></details>
+<details class="section" open id="key-findings-section"><summary>Key findings</summary><div class="section-body"><p class="section-note">__SUBDOMAIN_NOTE__ Highlights are grouped by validation state; complete evidence remains in JSON/CSV.</p>__ZONE_WARNING____KEY_FINDINGS__</div></details>
 <details class="section" open id="origin-discovery-section"><summary>Automatic Origin discovery</summary><div class="section-body"><p class="section-note">__ORIGIN_SUMMARY__</p>__ORIGIN_TABLE__</div></details>
-<details class="section" open id="graph-section"><summary>Interactive relationship explorer</summary><div class="section-body"><p class="section-note">Explore correlations between domains, addresses, infrastructure, technologies and evidence. Search or filter to focus a dense graph.</p><div class="graph-shell" id="graph-shell"><div class="graph-toolbar"><label class="graph-search"><span class="sr-only">Search graph nodes</span><input id="graph-search" type="search" placeholder="Find a domain, IP, ASN, technology…" autocomplete="off"><button class="graph-search-clear" id="clear-graph-search" type="button" title="Clear graph search" aria-label="Clear graph search">×</button></label><div class="graph-actions" role="toolbar" aria-label="Graph controls"><div class="layout-switch" role="group" aria-label="Graph layout"><button class="layout-button" id="layout-network" type="button" aria-pressed="true">Network</button><button class="layout-button" id="layout-groups" type="button" aria-pressed="false">Groups</button></div><button class="graph-action" id="zoom-out" type="button" title="Zoom out" aria-label="Zoom out">&minus;</button><input class="zoom-range" id="graph-zoom" type="range" min="25" max="260" value="100" step="5" aria-label="Graph zoom"><output class="zoom-value" id="graph-zoom-value">100%</output><button class="graph-action" id="zoom-in" type="button" title="Zoom in" aria-label="Zoom in">+</button><button class="graph-action" id="fit-graph" type="button" title="Fit all visible nodes">Fit</button><button class="graph-action" id="fullscreen-graph" type="button" title="Expand graph" aria-label="Expand graph">&#x26F6;</button><button class="graph-action" id="reset-graph" type="button" title="Reset filters and layout">Reset</button></div></div><div class="graph-status-strip"><span class="graph-metric"><strong id="visible-node-count">0</strong> nodes</span><span class="graph-metric"><strong id="visible-edge-count">0</strong> relationships</span><span class="graph-metric"><strong id="visible-kind-count">0</strong> types</span><span class="graph-selection-status" id="graph-selection-status">Select a node to reveal its correlation path</span></div><div class="graph-layout"><div class="graph-canvas" id="graph-canvas"><svg id="relationship-graph" role="img" aria-labelledby="graph-title graph-description"><title id="graph-title">Reconnaissance relationship graph</title><desc id="graph-description">Interactive network of domains, addresses, infrastructure, technologies and evidence.</desc></svg><div class="graph-tooltip" id="graph-tooltip" role="tooltip"></div><div class="graph-help">Wheel or +/− to zoom · drag the background to pan · drag nodes to reorganize · double-click a node to focus</div></div><aside class="graph-inspector" id="graph-inspector" aria-live="polite"><div class="inspector-empty"><div><div class="inspector-empty-icon">◎</div><h3>Nothing selected</h3><p>Select a node to inspect its evidence and connected relationships.</p></div></div></aside></div><div class="legend" id="graph-legend" aria-label="Filter nodes by type"></div></div></div></details>
+<details class="section" open id="graph-section"><summary>Interactive relationship explorer</summary><div class="section-body"><p class="section-note">Explore correlations between domains, addresses, infrastructure, technologies and evidence. Search or filter to focus a dense graph.</p><div class="graph-shell" id="graph-shell"><div class="graph-toolbar"><label class="graph-search"><span class="sr-only">Search graph nodes</span><input id="graph-search" type="search" placeholder="Find a domain, IP, ASN, technology…" autocomplete="off"><button class="graph-search-clear" id="clear-graph-search" type="button" title="Clear graph search" aria-label="Clear graph search">×</button></label><div class="graph-actions" role="toolbar" aria-label="Graph controls"><div class="layout-switch" role="group" aria-label="Graph layout"><button class="layout-button" id="layout-network" type="button" aria-pressed="true">Network</button><button class="layout-button" id="layout-groups" type="button" aria-pressed="false">Groups</button></div><label class="graph-range-control spacing-control" title="Increase or reduce the distance between nodes"><span class="graph-range-label">Spacing</span><input class="spacing-range" id="graph-spacing" type="range" min="60" max="180" value="100" step="10" aria-label="Node spacing"><output class="spacing-value" id="graph-spacing-value">100%</output></label><button class="graph-action" id="zoom-out" type="button" title="Zoom out" aria-label="Zoom out">&minus;</button><label class="graph-range-control zoom-control" title="Graph zoom"><span class="sr-only">Zoom</span><input class="zoom-range" id="graph-zoom" type="range" min="25" max="260" value="100" step="5" aria-label="Graph zoom"><output class="zoom-value" id="graph-zoom-value">100%</output></label><button class="graph-action" id="zoom-in" type="button" title="Zoom in" aria-label="Zoom in">+</button><button class="graph-action" id="fit-graph" type="button" title="Fit all visible nodes">Fit</button><button class="graph-action" id="fullscreen-graph" type="button" title="Expand graph" aria-label="Expand graph">&#x26F6;</button><button class="graph-action" id="reset-graph" type="button" title="Reset filters, spacing, and layout">Reset</button></div></div><div class="graph-status-strip"><span class="graph-metric"><strong id="visible-node-count">0</strong> nodes</span><span class="graph-metric"><strong id="visible-edge-count">0</strong> relationships</span><span class="graph-metric"><strong id="visible-kind-count">0</strong> types</span><span class="graph-selection-status" id="graph-selection-status">Select a node to reveal its correlation path</span></div><div class="graph-layout"><div class="graph-canvas" id="graph-canvas"><svg id="relationship-graph" role="img" aria-labelledby="graph-title graph-description"><title id="graph-title">Reconnaissance relationship graph</title><desc id="graph-description">Interactive network of domains, addresses, infrastructure, technologies and evidence.</desc></svg><div class="graph-tooltip" id="graph-tooltip" role="tooltip"></div><div class="graph-help">Spacing separates nodes · wheel or +/− zooms · drag the background to pan · drag nodes to reorganize</div></div><aside class="graph-inspector" id="graph-inspector" aria-live="polite"><div class="inspector-empty"><div><div class="inspector-empty-icon">◎</div><h3>Nothing selected</h3><p>Select a node to inspect its evidence and connected relationships.</p></div></div></aside></div><div class="legend" id="graph-legend" aria-label="Filter nodes by type"></div></div></div></details>
 <details class="section" open id="evidence-section"><summary>Complete evidence explorer</summary><div class="section-body"><div class="controls"><label class="field"><span>Search findings and metadata</span><input id="evidence-search" type="search" placeholder="Domain, ASN, source, provider…"></label><label class="field"><span>Finding type</span><select id="evidence-kind"><option value="">All types</option></select></label><button class="action" id="show-all-evidence" type="button">Show all</button></div><p class="evidence-status" id="evidence-status" aria-live="polite"></p><div id="evidence-list"></div></div></details>
 <details class="section"><summary>ASN intelligence</summary><div class="section-body">__ASN_TABLE__</div></details>
 <details class="section"><summary>Network organizations</summary><div class="section-body">__ORG_TABLE__</div></details>
@@ -270,7 +385,7 @@ function findingElement(finding){const item=document.createElement("details");it
 function renderEvidence(){const query=search.value.trim().toLowerCase(),selected=kindSelect.value,matching=findings.filter(finding=>(!selected||finding.kind===selected)&&(!query||JSON.stringify(finding).toLowerCase().includes(query)));list.replaceChildren(...matching.map(findingElement));status.textContent=`Showing ${matching.length} of ${findings.length} findings`;document.querySelectorAll(".stat").forEach(card=>card.setAttribute("aria-pressed",String(Boolean(selected)&&card.dataset.kind===selected)))}
 kinds.forEach(kind=>{const option=document.createElement("option");option.value=kind;option.textContent=kind;kindSelect.append(option)});search.addEventListener("input",renderEvidence);kindSelect.addEventListener("change",renderEvidence);document.getElementById("show-all-evidence").addEventListener("click",()=>{search.value="";kindSelect.value="";renderEvidence()});document.querySelectorAll(".stat").forEach(card=>card.addEventListener("click",()=>{const kind=card.dataset.kind||"";kindSelect.value=kindSelect.value===kind?"":kind;search.value="";evidenceSection.open=true;renderEvidence();evidenceSection.scrollIntoView({behavior:"smooth",block:"start"})}));renderEvidence();
 
-const svg=document.getElementById("relationship-graph"),shell=document.getElementById("graph-shell"),canvas=document.getElementById("graph-canvas"),tooltip=document.getElementById("graph-tooltip"),inspector=document.getElementById("graph-inspector"),graphSearch=document.getElementById("graph-search"),zoomSlider=document.getElementById("graph-zoom"),zoomOutput=document.getElementById("graph-zoom-value"),selectionStatus=document.getElementById("graph-selection-status");
+const svg=document.getElementById("relationship-graph"),shell=document.getElementById("graph-shell"),canvas=document.getElementById("graph-canvas"),tooltip=document.getElementById("graph-tooltip"),inspector=document.getElementById("graph-inspector"),graphSearch=document.getElementById("graph-search"),zoomSlider=document.getElementById("graph-zoom"),zoomOutput=document.getElementById("graph-zoom-value"),spacingSlider=document.getElementById("graph-spacing"),spacingOutput=document.getElementById("graph-spacing-value"),selectionStatus=document.getElementById("graph-selection-status");
 const graph=report.graph||{nodes:[],edges:[]},nodes=Array.isArray(graph.nodes)?graph.nodes.map(node=>({...node})):[],byId=new Map(nodes.map(node=>[node.id,node])),edges=(Array.isArray(graph.edges)?graph.edges:[]).filter(edge=>byId.has(edge.source)&&byId.has(edge.target));
 const order=["domain","url","api_endpoint","email","phone","address","waf","dns_zone_transfer","ip","cidr","asn","organization","network_registration","service","technology","whois","cloud_asset","cloud_provider","fingerprint"],present=[...new Set(nodes.map(node=>node.kind))];
 present.sort((a,b)=>{const ai=order.indexOf(a),bi=order.indexOf(b);return(ai<0?999:ai)-(bi<0?999:bi)||a.localeCompare(b)});
@@ -302,7 +417,11 @@ function groupedLayout(){
   return positions
 }
 const networkPositions=networkLayout(),groupPositions=groupedLayout(),clusterGuides=[];
-present.forEach(kind=>{const group=groups.get(kind)||[],points=group.map(node=>groupPositions.get(node.id)).filter(Boolean),center=points[0]||{x:width/2,y:height/2},radius=Math.max(82,...points.map(point=>Math.hypot(point.x-center.x,point.y-center.y)+38)),container=makeSvg("g",{display:"none"}),orbit=makeSvg("circle",{class:"cluster-orbit",cx:center.x,cy:center.y,r:radius}),label=makeSvg("text",{class:"cluster-label",x:center.x,y:center.y-radius-18});label.textContent=`${kindName(kind)} · ${group.length}`;container.append(orbit,label);orbitLayer.append(container);clusterGuides.push(container)});
+let spacingScale=1;
+function scalePosition(point){return{x:width/2+(point.x-width/2)*spacingScale,y:height/2+(point.y-height/2)*spacingScale}}
+function layoutPositions(name=currentLayout){const source=name==="groups"?groupPositions:networkPositions;return new Map([...source].map(([id,point])=>[id,scalePosition(point)]))}
+function updateClusterGuides(){clusterGuides.forEach(({kind,orbit,label})=>{const group=groups.get(kind)||[],points=group.map(node=>groupPositions.get(node.id)).filter(Boolean).map(scalePosition),center=points[0]||{x:width/2,y:height/2},radius=Math.max(82,...points.map(point=>Math.hypot(point.x-center.x,point.y-center.y)+38));orbit.setAttribute("cx",center.x);orbit.setAttribute("cy",center.y);orbit.setAttribute("r",radius);label.setAttribute("x",center.x);label.setAttribute("y",center.y-radius-18)})}
+present.forEach(kind=>{const group=groups.get(kind)||[],container=makeSvg("g",{display:"none"}),orbit=makeSvg("circle",{class:"cluster-orbit"}),label=makeSvg("text",{class:"cluster-label"});label.textContent=`${kindName(kind)} · ${group.length}`;container.append(orbit,label);orbitLayer.append(container);clusterGuides.push({kind,container,orbit,label})});updateClusterGuides();
 nodes.forEach(node=>{const position=networkPositions.get(node.id)||{x:width/2,y:height/2};node.x=position.x;node.y=position.y});
 const edgeElements=edges.map((edge,index)=>{const path=makeSvg("path",{class:"edge","data-source":edge.source,"data-target":edge.target,"marker-end":"url(#edge-arrow)"}),label=makeSvg("text",{class:"edge-label","text-anchor":"middle"}),title=makeSvg("title");title.textContent=edge.relationship;label.textContent=edge.relationship;path.append(title);edgeLayer.append(path);edgeLabelLayer.append(label);return{edge,path,label,index}}),nodeElements=new Map();
 const short=(value,limit=22)=>String(value||"").length>limit?String(value).slice(0,limit-1)+"…":String(value||"-");
@@ -357,9 +476,10 @@ function fitGraph(){
   view.scale=scale;view.x=(width-(minX+maxX)*scale)/2;view.y=(height-(minY+maxY)*scale)/2;applyView()
 }
 function centerOn(node,scale=1.45){view.scale=Math.max(.25,Math.min(2.6,scale));view.x=width/2-node.x*view.scale;view.y=height/2-node.y*view.scale;applyView()}
+function applySpacing(){spacingScale=Number(spacingSlider.value)/100;spacingOutput.textContent=`${Math.round(spacingScale*100)}%`;animationId++;const targets=layoutPositions(currentLayout);nodes.forEach(node=>{const target=targets.get(node.id);if(target){node.x=target.x;node.y=target.y;updateNode(node)}});updateClusterGuides();updateEdges()}
 function setLayout(name,animate=true){
-  currentLayout=name;document.getElementById("layout-network").setAttribute("aria-pressed",String(name==="network"));document.getElementById("layout-groups").setAttribute("aria-pressed",String(name==="groups"));clusterGuides.forEach(guide=>guide.setAttribute("display",name==="groups"?"":"none"));
-  const targets=name==="groups"?groupPositions:networkPositions,starts=new Map(nodes.map(node=>[node.id,{x:node.x,y:node.y}])),token=++animationId;
+  currentLayout=name;document.getElementById("layout-network").setAttribute("aria-pressed",String(name==="network"));document.getElementById("layout-groups").setAttribute("aria-pressed",String(name==="groups"));clusterGuides.forEach(({container})=>container.setAttribute("display",name==="groups"?"":"none"));updateClusterGuides();
+  const targets=layoutPositions(name),starts=new Map(nodes.map(node=>[node.id,{x:node.x,y:node.y}])),token=++animationId;
   if(!animate){nodes.forEach(node=>{const target=targets.get(node.id);if(target){node.x=target.x;node.y=target.y;updateNode(node)}});updateEdges();fitGraph();return}
   const started=performance.now(),duration=520;
   function frame(now){if(token!==animationId)return;const progress=Math.min(1,(now-started)/duration),eased=1-Math.pow(1-progress,3);nodes.forEach(node=>{const start=starts.get(node.id),target=targets.get(node.id);if(!start||!target)return;node.x=start.x+(target.x-start.x)*eased;node.y=start.y+(target.y-start.y)*eased;updateNode(node)});updateEdges();if(progress<1)requestAnimationFrame(frame);else fitGraph()}
@@ -378,10 +498,10 @@ graphSearch.addEventListener("input",()=>{query=graphSearch.value.trim().toLower
 graphSearch.addEventListener("keydown",event=>{if(event.key!=="Enter")return;const first=nodes.find(node=>visible(node)&&matchesQuery(node));if(first){selectNode(first);centerOn(first,Math.max(1.1,view.scale))}});
 document.getElementById("clear-graph-search").addEventListener("click",()=>{graphSearch.value="";query="";graphSearch.focus();refreshHighlight()});
 document.getElementById("layout-network").addEventListener("click",()=>setLayout("network"));document.getElementById("layout-groups").addEventListener("click",()=>setLayout("groups"));
-document.getElementById("zoom-in").addEventListener("click",()=>setZoom(view.scale*1.2));document.getElementById("zoom-out").addEventListener("click",()=>setZoom(view.scale/1.2));zoomSlider.addEventListener("input",()=>setZoom(Number(zoomSlider.value)/100));document.getElementById("fit-graph").addEventListener("click",fitGraph);
+document.getElementById("zoom-in").addEventListener("click",()=>setZoom(view.scale*1.2));document.getElementById("zoom-out").addEventListener("click",()=>setZoom(view.scale/1.2));zoomSlider.addEventListener("input",()=>setZoom(Number(zoomSlider.value)/100));spacingSlider.addEventListener("input",applySpacing);document.getElementById("fit-graph").addEventListener("click",fitGraph);
 document.getElementById("fullscreen-graph").addEventListener("click",()=>{const expanded=shell.classList.toggle("is-expanded");document.body.classList.toggle("graph-expanded",expanded);document.getElementById("fullscreen-graph").title=expanded?"Exit expanded view":"Expand graph";setTimeout(fitGraph,80)});
 document.addEventListener("keydown",event=>{if(event.key==="Escape"&&shell.classList.contains("is-expanded")){shell.classList.remove("is-expanded");document.body.classList.remove("graph-expanded");setTimeout(fitGraph,80)}});
-document.getElementById("reset-graph").addEventListener("click",()=>{graphSearch.value="";query="";activeKinds.clear();present.forEach(kind=>activeKinds.add(kind));legend.querySelectorAll(".legend-item").forEach(item=>item.setAttribute("aria-pressed","true"));clearSelection();updateVisibility();setLayout("network")});
+document.getElementById("reset-graph").addEventListener("click",()=>{graphSearch.value="";query="";spacingSlider.value="100";spacingScale=1;spacingOutput.textContent="100%";activeKinds.clear();present.forEach(kind=>activeKinds.add(kind));legend.querySelectorAll(".legend-item").forEach(item=>item.setAttribute("aria-pressed","true"));clearSelection();updateVisibility();setLayout("network")});
 if(nodes.length){nodes.forEach(updateNode);updateEdges();updateVisibility();requestAnimationFrame(fitGraph)}else{const empty=makeSvg("text",{x:width/2,y:height/2,"text-anchor":"middle",class:"cluster-label"});empty.textContent="No relationship data was collected";viewport.append(empty);updateMetrics();applyView()}
 })();
 </script></body></html>"""
@@ -410,7 +530,7 @@ if(nodes.length){nodes.forEach(updateNode);updateEdges();updateVisibility();requ
                 f"{origin.get('warning', '')}"
             ) if isinstance(origin, dict) and origin else "Automatic Origin discovery was not run."
         ),
-        "__KEY_FINDINGS__": key_table,
+        "__KEY_FINDINGS__": key_cards,
         "__ZONE_WARNING__": zone_warning,
         **tables,
     }

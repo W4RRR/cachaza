@@ -138,6 +138,8 @@ class InteractiveReportTests(unittest.TestCase):
         self.assertIn("Complete evidence explorer", document)
         self.assertIn('id="relationship-graph"', document)
         self.assertIn('id="graph-zoom"', document)
+        self.assertIn('id="graph-spacing"', document)
+        self.assertIn('id="graph-spacing-value"', document)
         self.assertIn('id="layout-groups"', document)
         self.assertIn('id="graph-search"', document)
         self.assertIn('id="key-findings-section"', document)
@@ -145,6 +147,9 @@ class InteractiveReportTests(unittest.TestCase):
         self.assertIn('if(selectedNode)renderInspector(selectedNode);else emptyInspector()', document)
         self.assertIn('data-kind="asn"', document)
         self.assertIn("finding.metadata", document)
+        self.assertIn("function applySpacing()", document)
+        self.assertIn('spacingSlider.addEventListener("input",applySpacing)', document)
+        self.assertIn("const targets=layoutPositions(currentLayout)", document)
         match = re.search(
             r'<script type="application/json" id="report-data">(.*?)</script>',
             document,
@@ -154,6 +159,76 @@ class InteractiveReportTests(unittest.TestCase):
         embedded = json.loads(match.group(1))
         self.assertEqual(len(embedded["findings"]), 7)
         self.assertGreaterEqual(len(embedded["graph"]["edges"]), 3)
+
+    def test_key_findings_group_wafs_and_subdomains_into_readable_cards(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = RunWorkspace(Path(temp))
+            workspace.add(
+                Finding("input", "scope", "domain", "example.com", True, {"root": True})
+            )
+            workspace.add(
+                Finding(
+                    "subdomains",
+                    "subfinder",
+                    "domain",
+                    "api.example.com",
+                    True,
+                    {"root": "example.com"},
+                )
+            )
+            workspace.add(
+                Finding(
+                    "dns",
+                    "dnsx",
+                    "domain",
+                    "api.example.com",
+                    True,
+                    {"resolved": True},
+                )
+            )
+            workspace.add(
+                Finding(
+                    "http",
+                    "httpx",
+                    "url",
+                    "https://api.example.com",
+                    True,
+                    {"host": "api.example.com", "status_code": 200},
+                )
+            )
+            workspace.add(
+                Finding(
+                    "waf",
+                    "nuclei-waf-detect",
+                    "waf",
+                    "Apache Generic",
+                    True,
+                    {
+                        "vendor": "Apache Generic",
+                        "target": "https://api.example.com",
+                        "confidence": "candidate",
+                        "requires_manual_validation": True,
+                    },
+                )
+            )
+            report = build_report_data(
+                workspace,
+                TargetSpec(domains=["example.com"]),
+                version="test",
+                failures=[],
+            )
+        document = render_html(report)
+        key_section = document.split('id="key-findings-section"', 1)[1].split(
+            'id="origin-discovery-section"', 1
+        )[0]
+        self.assertIn('class="key-findings-layout"', key_section)
+        self.assertIn("WAF observations", key_section)
+        self.assertIn("Apache Generic", key_section)
+        self.assertIn("Candidate · Manual Validation", key_section)
+        self.assertIn("HTTP-responsive", key_section)
+        self.assertIn("api.example.com", key_section)
+        self.assertIn("HTTP 200", key_section)
+        self.assertNotIn("<table", key_section)
 
     def test_report_surfaces_external_source_status(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
