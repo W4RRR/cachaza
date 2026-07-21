@@ -23,7 +23,7 @@ _________     _____  _________   ___ ___    _____  __________  _____
  \______  /\____|__  /\______  /\___|_  /\____|__  /_______ \____|__  /
         \/         \/        \/       \/         \/        \/       \/
                    github.com/W4RRR/cachaza by W4RRR
-                                v0.10.6
+                                v0.10.7
 ```
 
 Cachaza turns an explicitly defined domain or network scope into a reproducible reconnaissance workspace. It collects passive intelligence first, applies scope decisions to every observation, and requires explicit authorization before direct-contact stages run.
@@ -650,7 +650,7 @@ cachaza -update
 
 Both commands are equivalent.
 
-Normal CLI invocations check the latest public version at most once every 24 hours and cache the result. An interactive terminal can accept an update prompt; non-interactive runs print guidance and continue. Disable that network check and cache access in controlled or offline environments with:
+Normal CLI invocations check the latest public version at most once every 24 hours and cache the result. When a newer version exists, the warning always shows `cachaza -up`; an interactive terminal can run it directly from the prompt, while non-interactive runs print the guidance and continue. Disable that network check and cache access in controlled or offline environments with:
 
 ```bash
 export CACHAZA_SKIP_UPDATE_CHECK=1

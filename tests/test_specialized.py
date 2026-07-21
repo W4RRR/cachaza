@@ -17,7 +17,7 @@ from cachaza.reports import (
     build_subdomain_summary,
     render_key_findings_console,
 )
-from cachaza.update import is_newer, perform_update, version_key
+from cachaza.update import is_newer, offer_update, perform_update, version_key
 
 
 class SpecializedAdapterTests(unittest.TestCase):
@@ -291,11 +291,15 @@ class SpecializedCliTests(unittest.TestCase):
             self.assertEqual(code, 0)
             manifest = json.loads((root / "rest" / "manifest.json").read_text(encoding="utf-8"))
             commands = [item["command"] for item in manifest["external_commands"]]
+            stages = [item["name"] for item in manifest["stages"]]
             dnsenum_index = next(index for index, command in enumerate(commands) if "dnsenum example.com" in command)
             dnsx_index = next(index for index, command in enumerate(commands) if command.startswith("dnsx "))
-            httpx_index = next(index for index, command in enumerate(commands) if command.startswith("httpx "))
             self.assertLess(dnsenum_index, dnsx_index)
-            self.assertLess(dnsx_index, httpx_index)
+            self.assertLess(stages.index("dns_enum"), stages.index("dns"))
+            self.assertLess(stages.index("dns"), stages.index("http"))
+            for stage in ("dns_enum", "dns", "http"):
+                status = next(item["status"] for item in manifest["stages"] if item["name"] == stage)
+                self.assertEqual(status, "completed")
             self.assertIn("-wd example.com", commands[dnsx_index])
 
     def test_help_mentions_update_and_specialized_shortcuts(self) -> None:
@@ -343,6 +347,37 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(calls[1].kwargs["cwd"], root)
         self.assertEqual(calls[2].args[0], ["/home/kali/.local/bin/cachaza", "-version"])
         self.assertEqual(calls[3].args[0], ["/home/kali/.local/bin/cachaza", "doctor"])
+
+    def test_outdated_version_warns_with_short_update_command(self) -> None:
+        output = io.StringIO()
+        with (
+            patch("cachaza.update.latest_version", return_value="99.0.0"),
+            contextlib.redirect_stderr(output),
+        ):
+            self.assertIsNone(offer_update(Console(color=False)))
+
+        warning = output.getvalue()
+        self.assertIn("UPDATE AVAILABLE", warning)
+        self.assertIn("version 99.0.0 is available", warning)
+        self.assertIn("Update with: cachaza -up", warning)
+
+    def test_outdated_interactive_version_prompts_and_can_update(self) -> None:
+        terminal_input = Mock()
+        terminal_input.isatty.return_value = True
+        terminal_error = io.StringIO()
+        terminal_error.isatty = Mock(return_value=True)  # type: ignore[method-assign]
+        with (
+            patch("cachaza.update.latest_version", return_value="99.0.0"),
+            patch("cachaza.update.sys.stdin", terminal_input),
+            patch("cachaza.update.sys.stderr", terminal_error),
+            patch("builtins.input", return_value="y") as prompt,
+            patch("cachaza.update.perform_update", return_value=0) as updater,
+        ):
+            self.assertEqual(offer_update(Console(color=False)), 0)
+
+        prompt.assert_called_once_with("Run cachaza -up now? [Y/n] ")
+        updater.assert_called_once()
+        self.assertIn("Update with: cachaza -up", terminal_error.getvalue())
 
     def test_banner_contains_project_name_and_attribution(self) -> None:
         output = io.StringIO()

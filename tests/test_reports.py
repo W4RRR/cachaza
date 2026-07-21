@@ -150,6 +150,8 @@ class InteractiveReportTests(unittest.TestCase):
         self.assertIn("function applySpacing()", document)
         self.assertIn('spacingSlider.addEventListener("input",applySpacing)', document)
         self.assertIn("const targets=layoutPositions(currentLayout)", document)
+        self.assertIn("main{width:100%;max-width:none;margin:0", document)
+        self.assertNotIn("main{max-width:1280px", document)
         match = re.search(
             r'<script type="application/json" id="report-data">(.*?)</script>',
             document,

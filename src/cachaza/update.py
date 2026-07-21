@@ -163,13 +163,16 @@ def offer_update(console: Console) -> int | None:
     latest = latest_version()
     if not latest or not is_newer(latest):
         return None
-    console.warn(f"Cachaza {__version__} is outdated; version {latest} is available.")
+    console.warn(
+        f"UPDATE AVAILABLE: Cachaza {__version__} is outdated; version {latest} is available.\n"
+        "    Update with: cachaza -up"
+    )
     if sys.stdin.isatty() and sys.stderr.isatty():
         try:
-            answer = input("Update now? [Y/n] ").strip().lower()
+            answer = input("Run cachaza -up now? [Y/n] ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             answer = "n"
         if answer in {"", "y", "yes", "s", "si", "sí"}:
             return perform_update(console)
-    console.warn(f"Update later with: cachaza -up\n  or: {update_command()}")
+    console.warn(f"Continuing with the installed version. Alternative command:\n    {update_command()}")
     return None
