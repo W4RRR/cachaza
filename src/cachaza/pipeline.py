@@ -932,7 +932,15 @@ class Pipeline:
         ]
         if not configured:
             return "Censys/IntelX/urlscan credentials unavailable; provider-backed Subfinder remains available"
-        return f"{counts['censys']} Censys, {counts['intelx']} IntelX, and {counts['urlscan']} urlscan findings"
+        issue_note = (
+            f"; {len(errors)} provider error(s), see rest/api/provider-status.json"
+            if errors
+            else ""
+        )
+        return (
+            f"{counts['censys']} Censys, {counts['intelx']} IntelX, and "
+            f"{counts['urlscan']} urlscan findings{issue_note}"
+        )
 
     def stage_certificates(self) -> str:
         if not self.options.active:
@@ -958,16 +966,64 @@ class Pipeline:
         binary = self._tool_or_plan("dnsx")
         if not binary:
             return "dnsx unavailable; DNS validation skipped"
-        input_file = self.workspace.write_lines("dnsx-targets.txt", domains)
-        argv = dnsx.build_argv(binary, str(input_file), rate_limit=self.options.rate_limit)
-        result = self.runner.run(argv, timeout=max(1800, self.options.timeout * 100))
-        if result.skipped:
-            return f"dry-run planned for {len(domains)} authorized domains"
-        self.workspace.write_text("dnsx.jsonl", result.stdout)
-        if result.returncode != 0:
-            raise RuntimeError(f"dnsx exited with {result.returncode}: {result.stderr.strip()[:500]}")
-        added = self._ingest_findings(dnsx.parse_output(result.stdout, self.target))
-        return f"{added} normalized DNS observations from {len(domains)} domains"
+        added = 0
+        attempted = 0
+        outputs: list[str] = []
+        skipped = True
+        for root in self.target.domains:
+            scoped = [
+                domain
+                for domain in domains
+                if domain == root or domain.endswith("." + root)
+            ]
+            if not scoped:
+                continue
+            attempted += len(scoped)
+            filename = (
+                "dnsx-targets.txt"
+                if len(self.target.domains) == 1
+                else f"dnsx-targets-{self._artifact_slug(root)}.txt"
+            )
+            input_file = self.workspace.write_lines(filename, scoped)
+            argv = dnsx.build_argv(
+                binary,
+                str(input_file),
+                rate_limit=self.options.rate_limit,
+                wildcard_domain=root,
+            )
+            result = self.runner.run(argv, timeout=max(1800, self.options.timeout * 100))
+            if result.skipped:
+                continue
+            skipped = False
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"dnsx exited with {result.returncode}: {result.stderr.strip()[:500]}"
+                )
+            outputs.append(result.stdout)
+            added += self._ingest_findings(dnsx.parse_output(result.stdout, self.target))
+        if skipped:
+            return f"dry-run planned for {attempted} authorized domains with wildcard filtering"
+        self.workspace.write_text("dnsx.jsonl", "\n".join(outputs))
+        return (
+            f"{added} normalized DNS observations from {attempted} domains; "
+            "dnsx wildcard filtering enabled"
+        )
+
+    def _validated_domain_targets(self) -> list[str]:
+        """Return DNS-confirmed domains when the run includes DNS validation."""
+        domains = self.workspace.values("domain", in_scope=True)
+        if self.options.dry_run or "dns" not in self.options.stages:
+            return domains
+        return sorted(
+            {
+                item.value
+                for item in self.workspace.findings
+                if item.kind == "domain"
+                and item.in_scope
+                and item.source == "dnsx"
+                and item.metadata.get("resolved") is True
+            }
+        )
 
     def _selected_subdomain_tools(self) -> list[str]:
         supported = ["subfinder", "assetfinder", "bbot"]
@@ -1470,7 +1526,7 @@ class Pipeline:
     def stage_active(self) -> str:
         if not self.options.active:
             return "disabled; use -active to run authorized direct probes"
-        domains = self.workspace.values("domain", in_scope=True)
+        domains = self._validated_domain_targets()
         networks, skipped = self._active_networks()
         domains_file = self.workspace.write_lines("active-domains.txt", domains)
         networks_file = self.workspace.write_lines("active-networks.txt", networks)
@@ -1515,7 +1571,7 @@ class Pipeline:
     def stage_ports(self) -> str:
         if not self.options.active:
             raise ValidationError("ports performs direct probes and requires -active")
-        domains = self.workspace.values("domain", in_scope=True)
+        domains = self._validated_domain_targets()
         domain_file = self.workspace.write_lines("port-targets.txt", domains)
         networks, skipped = self._active_networks()
         if skipped:
@@ -1616,7 +1672,7 @@ class Pipeline:
         if not self.options.active:
             raise ValidationError("http performs direct probes and requires -active")
         targets = sorted(
-            set(self.workspace.values("domain", in_scope=True))
+            set(self._validated_domain_targets())
             | set(self.workspace.values("service", in_scope=True))
         )
         if not targets:
@@ -2078,7 +2134,7 @@ class Pipeline:
         fallback_hosts = {
             value
             for value in (
-                set(self.workspace.values("domain", in_scope=True))
+                set(self._validated_domain_targets())
                 | set(self.workspace.values("ip", in_scope=True))
             )
             if value.casefold() not in covered_hosts

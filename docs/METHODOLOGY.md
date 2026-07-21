@@ -39,6 +39,12 @@ stage, source, kind, value, in_scope, metadata, observed_at
 
 The tuple `(source, kind, value)` is normally deduplicated within a workspace. WAF evidence also includes its target origin in the identity so the same vendor detected on two hosts is not collapsed. Source-specific context is preserved in metadata. `rest/findings.jsonl` is canonical; text lists are derived views.
 
+## Subdomain validation and noise control
+
+`dnsenum` and Fierce discoveries are candidates, not proof that a hostname is a distinct asset. When either bundle is requested alongside the normal active pipeline, discovery runs before DNS and HTTP validation. Cachaza invokes dnsx with root-specific wildcard filtering (`-wd ROOT_DOMAIN`) and passes only dnsx-confirmed names to later port and HTTP stages.
+
+Reports classify subdomains as HTTP-responsive, DNS-only, or unverified. Meaningful HTTP evidence includes 2xx/3xx and authentication or authorization responses such as 401/403; a 404 by itself is not promoted. A status code alone is not sufficient to defeat catch-all hosting because arbitrary names can return the same 200 page or redirect. Wildcard-like and brute-force-only candidates remain in `report.json`, CSV, and `rest/findings.jsonl` for provenance, but they are omitted from executive highlights, the relationship graph, and the PDF appendix.
+
 ## Endpoint and WAF boundary
 
 Endpoint inventory is built from GAU, Katana, endpoint-only Cariddi, JavaScript references, and passive URL sources. GAU observations retain their historical provenance and are not evidence that an origin is live. Katana and Cariddi remain within authorized FQDN scope; Cariddi uses `-e -plain` and does not enable `-s` secret hunting. JavaScript analysis records related URLs, routes, API endpoints, and Swagger/OpenAPI/GraphQL references without treating secret-like words as findings.
@@ -52,6 +58,8 @@ The default WAF tools are `wafw00f,nuclei`. Nmap correlation remains available o
 ## Failure and resume model
 
 Stages are isolated by default. A source or adapter failure is recorded in the manifest and later stages continue; `-strict` stops at the first failure. Successful stages write cache-keyed checkpoints under `rest/stages/`. A compatible resume loads prior findings and reuses checkpoints whose scope and execution options still match.
+
+Provider-level errors that do not abort the API stage remain visible in `rest/api/provider-status.json`, the HTML report, the run-issues metric, and the terminal summary. A completed stage therefore means orchestration completed; it does not imply every configured provider authenticated successfully.
 
 `-fresh` is deliberately constrained: Cachaza verifies `rest/scope.json`, confirms an identical target specification, and only then resets that workspace.
 

@@ -16,7 +16,12 @@ from .monitor import monitor_crtsh, monitor_gungnir
 from .origin import render_origin_summary
 from .pipeline import Pipeline, RunOptions
 from .profiles import ACTIVE_STAGES, DEFAULT_PROFILE, PROFILES, profile_stages
-from .reports import REPORT_FORMATS, build_key_findings, render_key_findings_console
+from .reports import (
+    REPORT_FORMATS,
+    build_key_findings,
+    build_subdomain_summary,
+    render_key_findings_console,
+)
 from .safety import (
     ValidationError,
     build_target_spec,
@@ -718,6 +723,11 @@ def command_run(args: argparse.Namespace, console: Console) -> int:
         (args.subdomains_bundle, "subdomains"),
         (args.harvester, "harvester"),
         (args.dns_enum, "dns_enum"),
+    ):
+        if enabled and name not in stages:
+            insertion = stages.index("dns") if "dns" in stages else len(stages)
+            stages.insert(insertion, name)
+    for enabled, name in (
         (args.waf, "waf"),
         (args.blackwidow_depth is not None, "blackwidow"),
         (args.origin_auto, "origin"),
@@ -805,7 +815,32 @@ def command_run(args: argparse.Namespace, console: Console) -> int:
             if report.is_file():
                 print(f"{report_format.upper()} report: {report}")
         print(f"Supporting artifacts: {root / 'rest'}")
-        print(render_key_findings_console(build_key_findings(workspace.findings), color=not args.no_color))
+        print(
+            render_key_findings_console(
+                build_key_findings(workspace.findings),
+                subdomain_summary=build_subdomain_summary(workspace.findings),
+                color=not args.no_color,
+            )
+        )
+        provider_path = root / "rest" / "api" / "provider-status.json"
+        if provider_path.is_file():
+            try:
+                provider_status = json.loads(provider_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                provider_status = {}
+            provider_issues = [
+                (name, status)
+                for name, status in sorted(provider_status.items())
+                if isinstance(status, dict) and status.get("status") == "error"
+            ]
+            if provider_issues:
+                print("\nPROVIDER ISSUES")
+                print("---------------")
+                for name, status in provider_issues:
+                    code = status.get("http_status")
+                    action = status.get("action") or status.get("error") or "Review provider credentials."
+                    suffix = f" HTTP {code}" if code else ""
+                    print(f"{name}{suffix}: {action}")
         origin_ranking = root / "rest" / "origin" / "final-ranking.json"
         if origin_ranking.is_file():
             try:

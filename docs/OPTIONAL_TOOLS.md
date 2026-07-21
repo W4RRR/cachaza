@@ -85,7 +85,7 @@ cachaza run -d example.com -profile full -active \
 | Adapter | Expected interface |
 |---|---|
 | Subfinder | JSONL through `-oJ -cs`; optional provider config through `-pc`. |
-| dnsx | JSONL through `-json`, response fields enabled. |
+| dnsx | JSONL through `-json`, response fields enabled, and root-specific `-wd` wildcard filtering before later active probes. |
 | Naabu | File input `-l`, port list `-p`, rate `-rate`. |
 | httpx | JSONL with status, IP, CNAME, CDN, ASN, and technology fields. |
 | Nuclei | One normalized live origin through `-u`, the immutable `-t http/technologies/waf-detect.yaml`, JSONL, rate/bulk/concurrency 1, and zero retries. No tags, severities, workflows, lists, directories, automatic scans, or other templates are accepted. |

@@ -64,6 +64,18 @@ class WafAdapterSafetyTests(unittest.TestCase):
         self.assertEqual(waf.parse_nuclei("not-json\n{broken", "https://example.com", self.target), [])
         self.assertEqual(waf.parse_nuclei("", "https://example.com", self.target), [])
 
+    def test_generic_apache_match_requires_manual_validation(self) -> None:
+        finding = waf.parse_nuclei(
+            json.dumps(
+                {"template-id": "waf-detect", "matcher-name": "apachegeneric"}
+            ),
+            "https://example.com",
+            self.target,
+        )[0]
+        self.assertEqual(finding.value, "Apache Generic")
+        self.assertEqual(finding.metadata["confidence"], "candidate")
+        self.assertTrue(finding.metadata["requires_manual_validation"])
+
     def test_waf_findings_from_same_tool_remain_distinct_per_origin(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             workspace = RunWorkspace(Path(temp))
@@ -86,15 +98,31 @@ class WafAdapterSafetyTests(unittest.TestCase):
 
     def test_report_distinguishes_absence_from_unknown_vendor(self) -> None:
         empty = render_key_findings_console(build_key_findings([]), color=False)
-        self.assertIn("WAFs                      : no evidence observed", empty)
+        self.assertIn("WAFs (0)\n    No evidence observed", empty)
         unknown = waf._finding(
             "wafw00f", waf.UNKNOWN_WAF, "https://example.com", self.target, "WAF detected"
         )
         summary = build_key_findings([unknown])
         self.assertEqual(
             summary["wafs"],
-            ["WAF detected (vendor unknown) @ https://example.com"],
+            [
+                "WAF detected (vendor unknown) [candidate; manual validation] "
+                "@ https://example.com"
+            ],
         )
+
+    def test_generic_waf_candidate_is_labeled_in_key_findings(self) -> None:
+        generic = waf.parse_nuclei(
+            json.dumps(
+                {"template-id": "waf-detect", "matcher-name": "apachegeneric"}
+            ),
+            "https://example.com",
+            self.target,
+        )[0]
+        rendered = render_key_findings_console(
+            build_key_findings([generic]), color=False
+        )
+        self.assertIn("Apache Generic [candidate; manual validation]", rendered)
 
 
 class WafPipelineTargetTests(unittest.TestCase):

@@ -12,7 +12,11 @@ from cachaza.adapters import blackwidow, contacts, dns_enum, harvester, waf
 from cachaza.cli import main
 from cachaza.console import CACHAZA_WORDMARK, Console
 from cachaza.models import Finding, TargetSpec
-from cachaza.reports import build_key_findings, render_key_findings_console
+from cachaza.reports import (
+    build_key_findings,
+    build_subdomain_summary,
+    render_key_findings_console,
+)
 from cachaza.update import is_newer, perform_update, version_key
 
 
@@ -31,6 +35,15 @@ class SpecializedAdapterTests(unittest.TestCase):
         self.assertEqual(
             waf.parse_wafw00f(
                 "[-] No WAF detected by the generic detection",
+                "https://example.com",
+                self.target,
+            ),
+            [],
+        )
+        self.assertEqual(
+            waf.parse_wafw00f(
+                "The Web Application Firewall Fingerprinting Toolkit\n"
+                "~ Sniffing Web Application Firewalls since 2014 ~",
                 "https://example.com",
                 self.target,
             ),
@@ -124,15 +137,75 @@ class SpecializedAdapterTests(unittest.TestCase):
 
     def test_key_findings_limit_wording_and_zone_warning(self) -> None:
         findings = [
-            Finding("subdomains", "test", "domain", f"s{index}.example.com", True, {"root": "example.com"})
+            Finding(
+                "subdomains",
+                "test",
+                "domain",
+                f"s{index}.example.com",
+                True,
+                {"root": "example.com"},
+            )
             for index in range(15)
         ]
         findings.append(
             Finding("dns_enum", "dnsenum", "dns_zone_transfer", "example.com", True, {"allowed": True})
         )
-        rendered = render_key_findings_console(build_key_findings(findings), color=False)
-        self.assertIn("more on reports", rendered)
+        rendered = render_key_findings_console(
+            build_key_findings(findings),
+            subdomain_summary=build_subdomain_summary(findings),
+            color=False,
+        )
+        self.assertIn("more actionable subdomains in the full report", rendered)
         self.assertIn("ALLOWED: example.com", rendered)
+
+    def test_key_findings_groups_wafs_and_validated_subdomains_on_separate_lines(self) -> None:
+        findings = [
+            Finding(
+                "waf",
+                "nuclei",
+                "waf",
+                "Cloudflare",
+                True,
+                {"vendor": "Cloudflare", "target": "https://api.example.com"},
+            ),
+            Finding(
+                "dns",
+                "dnsx",
+                "domain",
+                "api.example.com",
+                True,
+                {"root": "example.com", "resolved": True},
+            ),
+            Finding(
+                "http",
+                "httpx",
+                "url",
+                "https://api.example.com",
+                True,
+                {"host": "api.example.com", "status_code": 200},
+            ),
+            Finding(
+                "dns_enum",
+                "dnsenum",
+                "domain",
+                "noise.example.com",
+                True,
+                {"root": "example.com"},
+            ),
+        ]
+        rendered = render_key_findings_console(
+            build_key_findings(findings),
+            subdomain_summary=build_subdomain_summary(findings),
+            color=False,
+        )
+        self.assertIn("WAFs (1)\n    Cloudflare\n      - https://api.example.com", rendered)
+        self.assertIn(
+            "Actionable subdomains (1)\n    HTTP-responsive (1)\n"
+            "      - api.example.com [HTTP 200]",
+            rendered,
+        )
+        self.assertIn("Unverified / wildcard-like candidates omitted: 1", rendered)
+        self.assertNotIn("Cloudflare @ https://api.example.com", rendered)
 
 
 class SpecializedCliTests(unittest.TestCase):
@@ -196,6 +269,34 @@ class SpecializedCliTests(unittest.TestCase):
                 commands,
             )
             self.assertNotIn("http-waf-detect,http-waf-fingerprint", commands)
+
+    def test_dns_enumeration_runs_before_wildcard_filtered_dns_and_http(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "run"
+            code = main(
+                [
+                    "run",
+                    "-d",
+                    "example.com",
+                    "-profile",
+                    "safe",
+                    "-dns-enum",
+                    "-active",
+                    "-dry-run",
+                    "-o",
+                    str(root),
+                    "-silent",
+                ]
+            )
+            self.assertEqual(code, 0)
+            manifest = json.loads((root / "rest" / "manifest.json").read_text(encoding="utf-8"))
+            commands = [item["command"] for item in manifest["external_commands"]]
+            dnsenum_index = next(index for index, command in enumerate(commands) if "dnsenum example.com" in command)
+            dnsx_index = next(index for index, command in enumerate(commands) if command.startswith("dnsx "))
+            httpx_index = next(index for index, command in enumerate(commands) if command.startswith("httpx "))
+            self.assertLess(dnsenum_index, dnsx_index)
+            self.assertLess(dnsx_index, httpx_index)
+            self.assertIn("-wd example.com", commands[dnsx_index])
 
     def test_help_mentions_update_and_specialized_shortcuts(self) -> None:
         output = io.StringIO()

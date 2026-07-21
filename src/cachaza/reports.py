@@ -6,6 +6,7 @@ import csv
 import ipaddress
 import io
 import json
+import re
 from html import escape as html_escape
 from pathlib import Path
 from typing import Any
@@ -22,9 +23,9 @@ REPORT_FORMATS = ("html", "json", "txt", "pdf", "csv")
 
 KEY_FINDING_LABELS = (
     ("wafs", "WAFs"),
+    ("subdomains", "Actionable subdomains"),
     ("api_key_candidates", "API key/secret candidates"),
     ("api_endpoints", "API endpoints"),
-    ("subdomains", "Subdomains"),
     ("emails", "Emails"),
     ("phones", "Phones"),
     ("addresses", "Addresses"),
@@ -32,25 +33,165 @@ KEY_FINDING_LABELS = (
 )
 
 
-def build_key_findings(findings: list[Finding] | list[dict[str, Any]]) -> dict[str, list[str]]:
-    """Create stable, deduplicated executive categories without exposing secret values."""
+NOISY_DNS_ENUM_SOURCES = frozenset({"dnsenum", "fierce"})
+LIVE_HTTP_STATUS_CODES = frozenset({401, 403})
+PDF_EVIDENCE_LIMIT = 100
+
+
+def _is_waf_banner_false_positive(item: dict[str, Any]) -> bool:
+    if item.get("kind") != "waf" or item.get("source") != "wafw00f":
+        return False
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    evidence = str(metadata.get("evidence") or "").casefold()
+    return evidence.strip() in {
+        "the web application firewall fingerprinting toolkit",
+        "~ sniffing web application firewalls since 2014 ~",
+    }
+
+
+def build_subdomain_summary(
+    findings: list[Finding] | list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Separate validated subdomains from unverified enumeration candidates.
+
+    DNS brute-force output is deliberately not promoted on its own. When active
+    DNS/HTTP evidence exists, only names that resolved through dnsx or produced
+    a meaningful HTTP response remain actionable. Passive-only reports retain
+    non-bruteforce discoveries so they do not become artificially empty.
+    """
     normalized = [raw.to_dict() if isinstance(raw, Finding) else raw for raw in findings]
-    root_domains = {
-        str(item.get("value") or "").casefold()
+    roots = {
+        str(item.get("value") or "").casefold().rstrip(".")
         for item in normalized
         if item.get("stage") == "input" and item.get("kind") == "domain"
     }
+    roots.update(
+        str(item.get("metadata", {}).get("root") or "").casefold().rstrip(".")
+        for item in normalized
+        if isinstance(item.get("metadata"), dict)
+        and item.get("metadata", {}).get("root")
+    )
+    roots.discard("")
+    evidence: dict[str, dict[str, Any]] = {}
+
+    def is_subdomain(host: str) -> bool:
+        return any(host.endswith("." + root) for root in roots)
+
+    def record(host: str) -> dict[str, Any] | None:
+        clean = host.casefold().rstrip(".")
+        if not clean or not is_subdomain(clean):
+            return None
+        return evidence.setdefault(
+            clean,
+            {
+                "host": clean,
+                "sources": set(),
+                "dns_resolved": False,
+                "http_statuses": set(),
+                "http_urls": set(),
+                "wildcard_suspect": False,
+            },
+        )
+
+    for item in normalized:
+        if _is_waf_banner_false_positive(item):
+            continue
+        kind = str(item.get("kind") or "")
+        source = str(item.get("source") or "")
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        if kind == "domain":
+            entry = record(str(item.get("value") or ""))
+            if entry is None:
+                continue
+            if source:
+                entry["sources"].add(source)
+            if source == "dnsx" and metadata.get("resolved") is True:
+                entry["dns_resolved"] = True
+            if metadata.get("wildcard_suspect") is True:
+                entry["wildcard_suspect"] = True
+        elif kind == "url":
+            value = str(item.get("value") or "")
+            host = str(metadata.get("host") or urlsplit(value).hostname or "")
+            entry = record(host)
+            if entry is None:
+                continue
+            if source:
+                entry["sources"].add(source)
+            status = metadata.get("status_code")
+            try:
+                code = int(status)
+            except (TypeError, ValueError):
+                code = 0
+            if code:
+                entry["http_statuses"].add(code)
+                entry["http_urls"].add(value)
+
+    def live_status(code: int) -> bool:
+        return 200 <= code < 400 or code in LIVE_HTTP_STATUS_CODES
+
+    has_active_validation = any(
+        entry["dns_resolved"] or entry["http_statuses"] for entry in evidence.values()
+    )
+    live_http: list[dict[str, Any]] = []
+    dns_only: list[str] = []
+    passive_only: list[str] = []
+    omitted: list[str] = []
+    for host, entry in sorted(evidence.items()):
+        statuses = sorted(entry["http_statuses"])
+        is_live = any(live_status(code) for code in statuses)
+        passive_sources = entry["sources"] - NOISY_DNS_ENUM_SOURCES - {"dnsx", "httpx"}
+        if entry["wildcard_suspect"]:
+            omitted.append(host)
+        elif is_live:
+            live_http.append(
+                {
+                    "host": host,
+                    "statuses": statuses,
+                    "urls": sorted(entry["http_urls"]),
+                }
+            )
+        elif entry["dns_resolved"]:
+            dns_only.append(host)
+        elif passive_sources:
+            passive_only.append(host)
+        else:
+            omitted.append(host)
+
+    actionable = [item["host"] for item in live_http] + dns_only
+    if not has_active_validation:
+        actionable.extend(passive_only)
+        passive_only = []
+    else:
+        omitted.extend(passive_only)
+    return {
+        "actionable": sorted(set(actionable)),
+        "live_http": live_http,
+        "dns_only": sorted(set(dns_only)),
+        "omitted": sorted(set(omitted)),
+        "active_validation_present": has_active_validation,
+    }
+
+
+def build_key_findings(findings: list[Finding] | list[dict[str, Any]]) -> dict[str, list[str]]:
+    """Create stable, deduplicated executive categories without exposing secret values."""
+    normalized = [raw.to_dict() if isinstance(raw, Finding) else raw for raw in findings]
     buckets: dict[str, set[str]] = {key: set() for key, _ in KEY_FINDING_LABELS}
     waf_targets: dict[str, set[str]] = {}
     for item in normalized:
+        if _is_waf_banner_false_positive(item):
+            continue
         kind = str(item.get("kind") or "")
         value = str(item.get("value") or "").strip()
-        stage = str(item.get("stage") or "")
         metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
         if not value:
             continue
         if kind == "waf":
             vendor = str(metadata.get("vendor") or value).strip()
+            if str(metadata.get("confidence") or "").casefold() == "candidate":
+                qualifier = "candidate"
+                if metadata.get("requires_manual_validation"):
+                    qualifier += "; manual validation"
+                vendor = f"{vendor} [{qualifier}]"
             origin = str(metadata.get("target") or "unknown origin").strip()
             waf_targets.setdefault(vendor, set()).add(origin)
         if kind == "api_key_candidate":
@@ -67,10 +208,6 @@ def build_key_findings(findings: list[Finding] | list[dict[str, Any]]) -> dict[s
             buckets["api_key_candidates"].add(safe_location)
         if kind == "api_endpoint" or (kind == "url" and metadata.get("endpoint")):
             buckets["api_endpoints"].add(value)
-        if kind == "domain" and stage != "input" and value.casefold() not in root_domains:
-            root = metadata.get("root")
-            if not isinstance(root, str) or value.casefold() != root.casefold():
-                buckets["subdomains"].add(value)
         if kind == "email":
             buckets["emails"].add(value)
         if kind == "phone":
@@ -80,33 +217,155 @@ def build_key_findings(findings: list[Finding] | list[dict[str, Any]]) -> dict[s
         if kind == "dns_zone_transfer" and metadata.get("allowed"):
             buckets["zone_transfer_allowed"].add(value)
     for vendor, origins in waf_targets.items():
-        buckets["wafs"].add(f"{vendor} @ {', '.join(sorted(origins, key=str.casefold))}")
+        ordered = sorted(origins, key=str.casefold)
+        shown = ordered[:5]
+        suffix = f" (+{len(ordered) - 5} more origins)" if len(ordered) > 5 else ""
+        buckets["wafs"].add(f"{vendor} @ {', '.join(shown)}{suffix}")
+    buckets["subdomains"].update(build_subdomain_summary(normalized)["actionable"])
     return {key: sorted(values, key=str.casefold) for key, values in buckets.items()}
 
 
 def render_key_findings_console(
-    key_findings: dict[str, list[str]], *, color: bool = True, subdomain_limit: int = 13
+    key_findings: dict[str, list[str]],
+    *,
+    subdomain_summary: dict[str, Any] | None = None,
+    color: bool = True,
+    subdomain_limit: int = 10,
 ) -> str:
+    """Render a scan-friendly summary without comma-packed terminal lines."""
+
     def paint(value: str, code: str) -> str:
         return f"\x1b[{code}m{value}\x1b[0m" if color else value
 
-    lines = ["", paint("KEY FINDINGS", "1;36"), paint("------------", "36")]
-    for key, label in KEY_FINDING_LABELS:
-        values = list(key_findings.get(key, []))
-        limit = subdomain_limit if key == "subdomains" else 8
-        shown = values[:limit]
-        suffix = f" (+{len(values) - limit} more on reports)" if len(values) > limit else ""
-        if key == "zone_transfer_allowed":
-            rendered = (
-                paint("ALLOWED: " + ", ".join(shown), "1;31")
-                if shown
-                else paint("not observed", "32")
+    def section(label: str, count: int | None = None) -> None:
+        suffix = f" ({count})" if count is not None else ""
+        lines.append(paint(f"{label}{suffix}", "1;36"))
+
+    def bullets(
+        values: list[str],
+        *,
+        indent: str = "    ",
+        limit: int = 8,
+        show_remaining: bool = True,
+    ) -> None:
+        for value in values[:limit]:
+            lines.append(f"{indent}- {value}")
+        remaining = len(values) - limit
+        if remaining > 0 and show_remaining:
+            lines.append(paint(f"{indent}+ {remaining} more in the full report", "33"))
+
+    lines = ["", paint("KEY FINDINGS", "1;36"), paint("------------", "36"), ""]
+
+    wafs = list(key_findings.get("wafs", []))
+    section("WAFs", len(wafs))
+    if not wafs:
+        lines.append("    No evidence observed")
+    for waf_entry in wafs:
+        vendor, separator, raw_origins = waf_entry.partition(" @ ")
+        if not separator:
+            lines.append(f"    - {waf_entry}")
+            continue
+        more_match = re.search(r"\s+\(\+(\d+) more origins\)$", raw_origins)
+        more_origins = int(more_match.group(1)) if more_match else 0
+        if more_match:
+            raw_origins = raw_origins[: more_match.start()]
+        origins = [value for value in raw_origins.split(", ") if value]
+        lines.append(f"    {vendor}")
+        bullets(origins, indent="      ", limit=5)
+        if more_origins:
+            lines.append(
+                paint(
+                    f"      + {more_origins} additional origins in the full report",
+                    "33",
+                )
             )
-        elif key == "wafs" and not shown:
-            rendered = "no evidence observed"
+
+    lines.append("")
+    actionable = list(key_findings.get("subdomains", []))
+    section("Actionable subdomains", len(actionable))
+    if subdomain_summary is None:
+        if actionable:
+            bullets(actionable, limit=subdomain_limit)
         else:
-            rendered = ", ".join(shown) if shown else "-"
-        lines.append(f"{label:<26}: {rendered}{suffix}")
+            lines.append("    None validated")
+    else:
+        live_http = [
+            item
+            for item in subdomain_summary.get("live_http", [])
+            if isinstance(item, dict) and item.get("host")
+        ]
+        dns_only = [str(value) for value in subdomain_summary.get("dns_only", [])]
+        active_validation = bool(subdomain_summary.get("active_validation_present"))
+        remaining_limit = subdomain_limit
+        if live_http:
+            lines.append(f"    HTTP-responsive ({len(live_http)})")
+            for item in live_http[:remaining_limit]:
+                statuses = ", ".join(
+                    f"HTTP {status}" for status in item.get("statuses", [])
+                )
+                suffix = f" [{statuses}]" if statuses else ""
+                lines.append(f"      - {item['host']}{suffix}")
+            shown_live = min(len(live_http), remaining_limit)
+            remaining_limit -= shown_live
+        if dns_only:
+            lines.append(f"    DNS-resolved only ({len(dns_only)})")
+            bullets(
+                dns_only,
+                indent="      ",
+                limit=remaining_limit,
+                show_remaining=False,
+            )
+            remaining_limit = max(0, remaining_limit - len(dns_only))
+        if actionable and not live_http and not dns_only:
+            label = "Passive-only; not actively validated" if not active_validation else "Reported"
+            lines.append(f"    {label} ({len(actionable)})")
+            bullets(
+                actionable,
+                indent="      ",
+                limit=remaining_limit,
+                show_remaining=False,
+            )
+        if not actionable:
+            lines.append("    None validated")
+        hidden_actionable = max(0, len(actionable) - subdomain_limit)
+        if hidden_actionable:
+            lines.append(
+                paint(
+                    f"    + {hidden_actionable} more actionable subdomains in the full report",
+                    "33",
+                )
+            )
+        omitted = len(subdomain_summary.get("omitted", []))
+        if omitted:
+            lines.append(
+                paint(
+                    f"    Unverified / wildcard-like candidates omitted: {omitted}",
+                    "33",
+                )
+            )
+
+    lines.extend(["", paint("Other findings", "1;36")])
+    for key, label in KEY_FINDING_LABELS:
+        if key in {"wafs", "subdomains", "zone_transfer_allowed"}:
+            continue
+        values = list(key_findings.get(key, []))
+        if not values:
+            lines.append(f"    {label:<26}: none")
+            continue
+        lines.append(f"    {label} ({len(values)})")
+        bullets(values)
+
+    zone_transfers = list(key_findings.get("zone_transfer_allowed", []))
+    if zone_transfers:
+        rendered = ", ".join(zone_transfers)
+        lines.append(
+            f"    {'Zone transfer allowed':<26}: "
+            + paint(f"ALLOWED: {rendered}", "1;31")
+        )
+    else:
+        lines.append(
+            f"    {'Zone transfer allowed':<26}: " + paint("not observed", "32")
+        )
     return "\n".join(lines)
 
 
@@ -128,6 +387,27 @@ def _build_graph(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     """Build a relationship graph from finding metadata and normalized values."""
     nodes: dict[str, dict[str, Any]] = {}
     edges: dict[tuple[str, str, str], dict[str, str]] = {}
+    subdomain_summary = data.get("subdomain_summary") or build_subdomain_summary(
+        data.get("findings", [])
+    )
+    visible_subdomains = {
+        str(value).casefold() for value in subdomain_summary.get("actionable", [])
+    }
+    live_http_subdomains = {
+        str(item.get("host") or "").casefold()
+        for item in subdomain_summary.get("live_http", [])
+        if isinstance(item, dict)
+    }
+    dns_only_subdomains = {
+        str(value).casefold() for value in subdomain_summary.get("dns_only", [])
+    }
+    root_domains = {
+        str(value).casefold().rstrip(".") for value in data.get("scope", {}).get("domains", [])
+    }
+
+    def hidden_enumeration_domain(value: str) -> bool:
+        clean = value.casefold().rstrip(".")
+        return any(clean.endswith("." + root) for root in root_domains) and clean not in visible_subdomains
 
     def add_node(
         kind: str,
@@ -211,9 +491,15 @@ def _build_graph(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
             add_node(kind, value, in_scope=True, source="scope")
 
     for finding in data.get("findings", []):
+        if _is_waf_banner_false_positive(finding):
+            continue
         kind = str(finding.get("kind") or "finding")
         value = str(finding.get("value") or "")
         source_name = str(finding.get("source") or "unknown")
+        if kind == "domain" and hidden_enumeration_domain(value):
+            continue
+        if kind == "ip" and source_name in NOISY_DNS_ENUM_SOURCES:
+            continue
         finding_id = add_node(
             kind,
             value,
@@ -327,6 +613,18 @@ def _build_graph(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     serialized_nodes: list[dict[str, Any]] = []
     for node in nodes.values():
         node["sources"] = sorted(node["sources"])
+        if node["kind"] == "domain":
+            label = str(node["label"]).casefold().rstrip(".")
+            if label in root_domains:
+                node["validation"] = "scope root"
+            elif label in live_http_subdomains:
+                node["validation"] = "HTTP-responsive"
+            elif label in dns_only_subdomains:
+                node["validation"] = "DNS-only"
+            elif label in visible_subdomains:
+                node["validation"] = "passive candidate"
+            else:
+                node["validation"] = "contextual"
         serialized_nodes.append(node)
     serialized_nodes.sort(key=lambda node: (node["kind"], node["label"]))
     serialized_edges = sorted(
@@ -386,6 +684,11 @@ def build_report_data(
                 origin_discovery = loaded_origin
         except (OSError, json.JSONDecodeError):
             pass
+    provider_issues = [
+        f"{name}: {status.get('error') or status.get('status')}"
+        for name, status in sorted(provider_status.items())
+        if isinstance(status, dict) and status.get("status") == "error"
+    ]
     data = {
         "tool": "cachaza",
         "version": version,
@@ -409,10 +712,12 @@ def build_report_data(
         },
         "stages": [stage.to_dict() for stage in workspace.stages],
         "failures": list(failures),
+        "issues": list(failures) + provider_issues,
         "provider_status": provider_status,
         "origin_discovery": origin_discovery,
         "findings": [finding.to_dict() for finding in workspace.findings],
     }
+    data["subdomain_summary"] = build_subdomain_summary(data["findings"])
     data["key_findings"] = build_key_findings(data["findings"])
     data["graph"] = _build_graph(data)
     return data
@@ -505,7 +810,13 @@ def _render_txt(data: dict[str, Any], *, color: bool = True) -> str:
     for key, label in scope_labels.items():
         lines.append(f"{label:<18}: {', '.join(scope.get(key, [])) or '-'}")
 
-    lines.append(render_key_findings_console(data["key_findings"], color=color))
+    lines.append(
+        render_key_findings_console(
+            data["key_findings"],
+            subdomain_summary=data.get("subdomain_summary"),
+            color=color,
+        )
+    )
 
     if data.get("origin_discovery"):
         origin = data["origin_discovery"]
@@ -919,9 +1230,9 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
     key_findings = data.get("key_findings", {})
     metrics = (
         (len(findings), "EVIDENCE RECORDS"),
-        (len(key_findings.get("subdomains", [])), "SUBDOMAINS"),
+        (len(key_findings.get("subdomains", [])), "ACTIONABLE SUBDOMAINS"),
         (len(sources), "EVIDENCE SOURCES"),
-        (len(data.get("failures", [])), "FAILED STAGES"),
+        (len(data.get("issues", data.get("failures", []))), "RUN ISSUES"),
     )
     metric_cells = [
         [Paragraph(str(value), styles["Metric"]), Paragraph(label, styles["MetricLabel"])]
@@ -1096,11 +1407,41 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
         ]
     )
     evidence_rows = [[p(value, "CellHead") for value in ("Type", "Value", "Source", "Scope", "Metadata")]]
+    actionable_domains = {
+        str(value).casefold()
+        for value in data.get("subdomain_summary", {}).get("actionable", [])
+    }
+    root_domains = {
+        str(value).casefold() for value in data.get("scope", {}).get("domains", [])
+    }
+    omitted_waf_banners = sum(_is_waf_banner_false_positive(item) for item in findings)
+    report_findings = [
+        item
+        for item in findings
+        if not _is_waf_banner_false_positive(item)
+        and not (
+                str(item.get("source") or "") in NOISY_DNS_ENUM_SOURCES
+                and (
+                    item.get("kind") == "ip"
+                    or (
+                        item.get("kind") == "domain"
+                        and str(item.get("value") or "").casefold()
+                        not in actionable_domains | root_domains
+                    )
+                )
+            )
+    ]
+    omitted_noisy = len(findings) - len(report_findings)
+    omitted_dns_enumeration = omitted_noisy - omitted_waf_banners
     sorted_findings = sorted(
-        findings,
-        key=lambda item: (str(item.get("kind", "")), str(item.get("value", "")), str(item.get("source", ""))),
+        report_findings,
+        key=lambda item: (
+            str(item.get("kind", "")),
+            str(item.get("value", "")),
+            str(item.get("source", "")),
+        ),
     )
-    for item in sorted_findings[:300]:
+    for item in sorted_findings[:PDF_EVIDENCE_LIMIT]:
         metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
         summary = json.dumps(metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         if len(summary) > 420:
@@ -1110,7 +1451,7 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
                 p(item.get("kind", "finding")),
                 p(item.get("value", "-")),
                 p(item.get("source", "unknown")),
-                p("Authorized" if item.get("in_scope") else "Candidate"),
+                p("In scope" if item.get("in_scope") else "Contextual"),
                 p(summary or "-"),
             ]
         )
@@ -1124,10 +1465,25 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
             style=table_style,
         )
     )
-    if len(sorted_findings) > 300:
+    if len(sorted_findings) > PDF_EVIDENCE_LIMIT or omitted_noisy:
+        details = []
+        if len(sorted_findings) > PDF_EVIDENCE_LIMIT:
+            details.append(
+                f"appendix limited to {PDF_EVIDENCE_LIMIT} of {len(sorted_findings)} reportable records"
+            )
+        if omitted_dns_enumeration:
+            details.append(
+                f"{omitted_dns_enumeration} unverified dnsenum/Fierce records omitted as noise"
+            )
+        if omitted_waf_banners:
+            details.append(
+                f"{omitted_waf_banners} wafw00f banner false positives omitted"
+            )
         story.append(
             Paragraph(
-                f"PDF appendix limited to 300 of {len(sorted_findings)} records; consult JSON/CSV for the complete evidence set.",
+                "PDF "
+                + "; ".join(details)
+                + "; consult JSON/CSV for the complete evidence set.",
                 styles["Warning"],
             )
         )

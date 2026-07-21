@@ -10,8 +10,14 @@ from ..safety import domain_in_scope, ip_in_scope
 from .common import json_records, string_values
 
 
-def build_argv(binary: str, input_file: str, *, rate_limit: int) -> list[str]:
-    return [
+def build_argv(
+    binary: str,
+    input_file: str,
+    *,
+    rate_limit: int,
+    wildcard_domain: str | None = None,
+) -> list[str]:
+    argv = [
         binary,
         "-l",
         input_file,
@@ -23,6 +29,9 @@ def build_argv(binary: str, input_file: str, *, rate_limit: int) -> list[str]:
         "-t",
         "2",
     ]
+    if wildcard_domain:
+        argv.extend(["-wd", wildcard_domain])
+    return argv
 
 
 def parse_output(text: str, target: TargetSpec) -> list[Finding]:

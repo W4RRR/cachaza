@@ -18,6 +18,15 @@ NEGATIVE = re.compile(
     r"no web application firewall",
     re.IGNORECASE,
 )
+BANNER = re.compile(
+    r"fingerprinting toolkit|sniffing web application firewalls since",
+    re.IGNORECASE,
+)
+UNKNOWN_DETECTION = re.compile(
+    r"\b(?:waf|web application firewall)\s+(?:was\s+)?detected\b|"
+    r"\bdetected\s+(?:an?\s+)?(?:waf|web application firewall)\b",
+    re.IGNORECASE,
+)
 VENDOR_PATTERNS = (
     re.compile(r"behind\s+(?:an?\s+)?(?P<vendor>.+?)\s+WAF\b", re.IGNORECASE),
     re.compile(r"is protected by\s+(?P<vendor>.+?)(?:\.|$)", re.IGNORECASE),
@@ -25,11 +34,13 @@ VENDOR_PATTERNS = (
 )
 NUCLEI_VENDOR_NAMES = {
     "akamai": "Akamai",
+    "apachegeneric": "Apache Generic",
     "aws-waf": "AWS WAF",
     "cloudflare": "Cloudflare",
     "f5-big-ip": "F5 BIG-IP",
     "imperva": "Imperva",
 }
+GENERIC_NUCLEI_MATCHERS = frozenset({"apachegeneric"})
 
 
 def build_nuclei_waf_argv(
@@ -71,7 +82,7 @@ def build_nuclei_waf_argv(
 
 def _vendor(text: str) -> str | None:
     cleaned = clean_text(text, 1_000)
-    if not cleaned or NEGATIVE.search(cleaned):
+    if not cleaned or NEGATIVE.search(cleaned) or BANNER.search(cleaned):
         return None
     for pattern in VENDOR_PATTERNS:
         match = pattern.search(cleaned)
@@ -80,7 +91,7 @@ def _vendor(text: str) -> str | None:
             value = re.sub(r"\s+\([^)]*\)\s*$", "", value).strip(" .:-[]()")
             if value and value.lower() not in {"a", "the", "unknown"}:
                 return value[:200]
-    if re.search(r"\bwaf\b|web application firewall", cleaned, re.IGNORECASE):
+    if UNKNOWN_DETECTION.search(cleaned):
         return UNKNOWN_WAF
     return None
 
@@ -160,6 +171,9 @@ def parse_nuclei(text: str, url: str, target: TargetSpec) -> list[Finding]:
         )
         finding = _finding("nuclei/waf-detect", value, url, target, evidence)
         finding.metadata["template_id"] = template_id
+        if canonical_matcher in GENERIC_NUCLEI_MATCHERS:
+            finding.metadata["confidence"] = "candidate"
+            finding.metadata["requires_manual_validation"] = True
         findings.append(finding)
     return findings
 

@@ -23,7 +23,7 @@ _________     _____  _________   ___ ___    _____  __________  _____
  \______  /\____|__  /\______  /\___|_  /\____|__  /_______ \____|__  /
         \/         \/        \/       \/         \/        \/       \/
                    github.com/W4RRR/cachaza by W4RRR
-                                v0.10.2
+                                v0.10.4
 ```
 
 Cachaza turns an explicitly defined domain or network scope into a reproducible reconnaissance workspace. It collects passive intelligence first, applies scope decisions to every observation, and requires explicit authorization before direct-contact stages run.
@@ -150,11 +150,7 @@ A simple output name is created under `./output`, so this writes to `./output/ex
 ### First authorized run
 
 ```bash
-cachaza run -d example.com \
-  -profile safe \
-  -active \
-  -format all \
-  -o example-safe
+cachaza run -d example.com -profile safe -active -format all -o example-safe
 ```
 
 ### Preview a run
@@ -168,12 +164,7 @@ cachaza plan -d example.com -profile full
 `-dry-run` creates the workspace, reports, artifact lists, and external command history without executing pipeline network or tool operations:
 
 ```bash
-cachaza run -d example.com \
-  -profile full \
-  -active \
-  -dry-run \
-  -v \
-  -o example-full-plan
+cachaza run -d example.com -profile full -active -dry-run -v -o example-full-plan
 ```
 
 ## 🧭 Profiles
@@ -196,10 +187,7 @@ The `full` profile:
 Use `-stages` to replace the profile stage list and `-skip-stages` to remove selected stages:
 
 ```bash
-cachaza run -d example.com \
-  -stages http,gau,crawl,js,waf \
-  -active \
-  -o focused-web
+cachaza run -d example.com -stages http,gau,crawl,js,waf -active -o focused-web
 ```
 
 An explicit active stage still requires `-active`. `-stages nuclei` is rejected with guidance to use the WAF stage instead.
@@ -296,12 +284,7 @@ https://example.com/search?q=term&page=2#results
 ### Focused endpoint example
 
 ```bash
-cachaza run -d example.com \
-  -stages http,gau,crawl,js \
-  -crawl-tools katana \
-  -active \
-  -format all \
-  -o example-endpoints
+cachaza run -d example.com -stages http,gau,crawl,js -crawl-tools katana -active -format all -o example-endpoints
 ```
 
 ## 🛡️ WAF identification
@@ -332,22 +315,13 @@ When `waf` runs alone without live URL evidence, the conservative fallback is th
 ### Focused WAF example
 
 ```bash
-cachaza run -d example.com \
-  -stages waf \
-  -waf-tools wafw00f,nuclei \
-  -active \
-  -format all \
-  -o example-waf
+cachaza run -d example.com -stages waf -waf-tools wafw00f,nuclei -active -format all -o example-waf
 ```
 
 Add `nmap` only for explicit NSE correlation:
 
 ```bash
-cachaza run -d example.com \
-  -stages waf \
-  -waf-tools wafw00f,nuclei,nmap \
-  -active \
-  -o example-waf-nmap
+cachaza run -d example.com -stages waf -waf-tools wafw00f,nuclei,nmap -active -o example-waf-nmap
 ```
 
 WAF findings retain the target origin, vendor, source, confidence, and bounded evidence. Reports distinguish an identified vendor, a WAF with unknown vendor, and no observed WAF evidence. A negative result does not prove that no WAF is present.
@@ -367,36 +341,19 @@ Disable direct validation in any mode with `-origin-no-direct-validation`.
 ### Passive candidate discovery
 
 ```bash
-cachaza run -d example.com \
-  -origin-auto \
-  -origin-mode passive \
-  -o example-origin-passive
+cachaza run -d example.com -origin-auto -origin-mode passive -o example-origin-passive
 ```
 
 ### Authorized balanced validation
 
 ```bash
-cachaza run -d example.com \
-  -origin-auto \
-  -origin-mode balanced \
-  -active \
-  -authorized \
-  -o example-origin
+cachaza run -d example.com -origin-auto -origin-mode balanced -active -authorized -o example-origin
 ```
 
 ### Bounded deep validation
 
 ```bash
-cachaza run -d example.com \
-  -origin-auto \
-  -origin-mode deep \
-  -origin-max-auto-candidates 20 \
-  -origin-max-requests 100 \
-  -origin-rate-limit 1 \
-  -origin-concurrency 2 \
-  -active \
-  -authorized \
-  -o example-origin-deep
+cachaza run -d example.com -origin-auto -origin-mode deep -origin-max-auto-candidates 20 -origin-max-requests 100 -origin-rate-limit 1 -origin-concurrency 2 -active -authorized -o example-origin-deep
 ```
 
 ### What Direct-origin validation checks
@@ -449,11 +406,7 @@ exclude-cidr: 192.0.2.8/29
 ```
 
 ```bash
-cachaza run \
-  -targets-file scope.txt \
-  -profile safe \
-  -active \
-  -o example-scope
+cachaza run -targets-file scope.txt -profile safe -active -o example-scope
 ```
 
 `-active` authorizes direct-contact stages against the explicit scope. `-authorized` is an additional acknowledgement for automatic Direct-origin validation; it does not broaden the general pipeline.
@@ -470,9 +423,7 @@ cp config/providers.example.env config/providers.env
 chmod 600 config/providers.env
 
 cachaza doctor -api-config config/providers.env
-cachaza run -d example.com \
-  -api-config config/providers.env \
-  -o example-passive
+cachaza run -d example.com -api-config config/providers.env -o example-passive
 ```
 
 Common variables include:
@@ -517,15 +468,7 @@ These controls reduce burst load; they do not alter tunnel MTU or TCP MSS. If a 
 The global limits can be tightened for an engagement:
 
 ```bash
-cachaza run -d example.com \
-  -profile full \
-  -active \
-  -ports 80,443,8080,8443 \
-  -rate-limit 1 \
-  -max-active-hosts 256 \
-  -max-crawl-urls 25 \
-  -format all \
-  -o example-controlled
+cachaza run -d example.com -profile full -active -ports 80,443,8080,8443 -rate-limit 1 -max-active-hosts 256 -max-crawl-urls 25 -format all -o example-controlled
 ```
 
 | Shortcut | Activity | Effect |
@@ -552,10 +495,22 @@ Default runs write JSON and TXT reports. Use `-format all` for every supported f
 | CSV | One normalized row per finding with spreadsheet formula-prefix neutralization |
 | PDF | Shareable summary, scope, infrastructure tables, stages, inventory, and bounded evidence appendix |
 
+The terminal and TXT `KEY FINDINGS` summary keeps high-signal evidence readable:
+WAF products are grouped with one origin per line, actionable subdomains are split
+into HTTP-responsive and DNS-only groups, and unverified or wildcard-like names are
+reduced to an omitted-candidate counter. Generic WAF signatures are labeled as
+candidates when manual validation is required.
+
+### HTML relationship explorer
+
+The self-contained HTML report is one of Cachaza's primary analysis surfaces. Its interactive graph connects domains, URLs, IP addresses, networks, technologies, WAF observations, registrations, and evidence sources while preserving the scope and provenance of each node.
+
+![Cachaza HTML report relationship explorer](docs/assets/cachaza-html-report.png)
+
+*Example relationship graph with identifying target values redacted.*
+
 ```bash
-cachaza run -d example.com \
-  -format all \
-  -o example-run
+cachaza run -d example.com -format all -o example-run
 ```
 
 The resulting layout is:

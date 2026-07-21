@@ -24,6 +24,16 @@ class DiscoveryAdapterTests(unittest.TestCase):
         self.assertFalse(by_value["198.51.100.4"].in_scope)
         self.assertFalse(by_value["edge.other.test"].in_scope)
 
+    def test_dnsx_enables_root_specific_wildcard_filtering(self) -> None:
+        argv = dnsx.build_argv(
+            "dnsx",
+            "targets.txt",
+            rate_limit=10,
+            wildcard_domain="example.com",
+        )
+        self.assertIn("-wd", argv)
+        self.assertEqual(argv[argv.index("-wd") + 1], "example.com")
+
     def test_gau_marks_sensitive_names_as_candidates(self) -> None:
         findings = gau.parse_output(
             "https://api.example.com/.env?old=1\nhttps://example.com/index.html\n",

@@ -155,6 +155,65 @@ class InteractiveReportTests(unittest.TestCase):
         self.assertEqual(len(embedded["findings"]), 7)
         self.assertGreaterEqual(len(embedded["graph"]["edges"]), 3)
 
+    def test_dnsenum_only_candidates_are_omitted_from_summary_and_graph(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = RunWorkspace(Path(temp))
+            workspace.add(
+                Finding("input", "scope", "domain", "example.com", True, {"root": True})
+            )
+            workspace.add(
+                Finding(
+                    "dns_enum",
+                    "dnsenum",
+                    "domain",
+                    "noise.example.com",
+                    True,
+                    {"root": "example.com", "dns_enumeration": True},
+                )
+            )
+            workspace.add(
+                Finding(
+                    "subdomains",
+                    "subfinder",
+                    "domain",
+                    "api.example.com",
+                    True,
+                    {"root": "example.com"},
+                )
+            )
+            workspace.add(
+                Finding(
+                    "dns",
+                    "dnsx",
+                    "domain",
+                    "api.example.com",
+                    True,
+                    {"resolved": True},
+                )
+            )
+            workspace.add(
+                Finding(
+                    "http",
+                    "httpx",
+                    "url",
+                    "https://api.example.com",
+                    True,
+                    {"host": "api.example.com", "status_code": 200},
+                )
+            )
+            report = build_report_data(
+                workspace,
+                TargetSpec(domains=["example.com"]),
+                version="test",
+                failures=[],
+            )
+        self.assertEqual(report["key_findings"]["subdomains"], ["api.example.com"])
+        self.assertEqual(report["subdomain_summary"]["dns_only"], [])
+        self.assertIn("noise.example.com", report["subdomain_summary"]["omitted"])
+        node_ids = {node["id"] for node in report["graph"]["nodes"]}
+        self.assertIn("domain:api.example.com", node_ids)
+        self.assertNotIn("domain:noise.example.com", node_ids)
+
 
 if __name__ == "__main__":
     unittest.main()
