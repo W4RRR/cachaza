@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from cachaza.cli import main
+from cachaza.external import CommandResult
 from cachaza.http import HttpError
 
 
@@ -459,8 +460,10 @@ class CliTests(unittest.TestCase):
                 ),
                 patch(
                     "cachaza.pipeline.crtsh_domains",
-                    side_effect=HttpError("HTTP 502 Bad Gateway"),
-                ),
+                    side_effect=HttpError(
+                        "HTTP 502 Bad Gateway", status_code=502, transient=True
+                    ),
+                ) as crtsh,
                 contextlib.redirect_stderr(errors),
             ):
                 code = main(
@@ -477,10 +480,113 @@ class CliTests(unittest.TestCase):
                     ]
                 )
             self.assertEqual(code, 0)
-            self.assertIn("Continuing with Cert Spotter results", errors.getvalue())
+            self.assertIn("remote service failure (HTTP 502)", errors.getvalue())
+            self.assertIn("Continuing with the other CT source", errors.getvalue())
+            self.assertEqual(crtsh.call_args.kwargs["timeout"], 30)
+            self.assertEqual(crtsh.call_args.kwargs["retries"], 2)
             findings = (root / "rest" / "findings.jsonl").read_text(encoding="utf-8")
             self.assertIn('"source": "certspotter"', findings)
             self.assertIn('"value": "api.example.com"', findings)
+            status = json.loads(
+                (root / "rest" / "ct" / "source-status.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(status["certspotter"]["status"], "ok")
+            self.assertEqual(status["certspotter"]["retrieved"], 1)
+            self.assertEqual(status["crt.sh"]["status"], "error")
+            self.assertEqual(
+                status["crt.sh"]["targets"]["example.com"]["error_kind"],
+                "remote_5xx",
+            )
+
+    def test_tenant_no_results_is_recorded_as_empty_not_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "run"
+            errors = io.StringIO()
+            result = CommandResult(
+                ["tenant-domains.sh", "-d", "example.com"],
+                1,
+                "[*] Searching for domain: example.com\n[-] No results found.\n",
+                "",
+            )
+            with (
+                patch("cachaza.pipeline.find_tool", return_value="tenant-domains.sh"),
+                patch("cachaza.pipeline.CommandRunner.run", return_value=result),
+                contextlib.redirect_stderr(errors),
+            ):
+                code = main(
+                    [
+                        "run",
+                        "-d",
+                        "example.com",
+                        "-stages",
+                        "tenant",
+                        "-o",
+                        str(root),
+                        "-format",
+                        "json",
+                    ]
+                )
+            self.assertEqual(code, 0)
+            self.assertNotIn("tenant-domains failed", errors.getvalue())
+            self.assertIn("recorded as an empty result", errors.getvalue())
+            status = json.loads(
+                (root / "rest" / "tenant-domains" / "status.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(status["example.com"]["status"], "empty")
+            self.assertEqual(status["example.com"]["related_domains"], 0)
+
+    def test_api_uses_intelx_assigned_host_and_capability_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "run"
+            config = Path(temp) / "providers.env"
+            config.write_text(
+                "INTELX_API_KEY=intel-key\nINTELX_HOST=https://free.intelx.io/\n",
+                encoding="utf-8",
+            )
+            with (
+                patch(
+                    "cachaza.pipeline.intelx_auth_info",
+                    return_value={"paths": {"/phonebook/search": {"credit": 25}}},
+                ) as auth,
+                patch(
+                    "cachaza.pipeline.intelx_phonebook",
+                    return_value={
+                        "result": {"selectors": []},
+                        "values": ["admin@example.com", "api.example.com"],
+                        "target": 0,
+                    },
+                ) as phonebook,
+            ):
+                code = main(
+                    [
+                        "run",
+                        "-d",
+                        "example.com",
+                        "-stages",
+                        "api",
+                        "-api-config",
+                        str(config),
+                        "-o",
+                        str(root),
+                        "-format",
+                        "json",
+                        "-silent",
+                    ]
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(auth.call_args.kwargs["host"], "https://free.intelx.io")
+            self.assertEqual(phonebook.call_args.kwargs["host"], "https://free.intelx.io")
+            self.assertEqual(phonebook.call_args.kwargs["target"], 0)
+            status = json.loads(
+                (root / "rest" / "api" / "provider-status.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(status["intelx"]["status"], "ok")
+            self.assertTrue(status["intelx"]["phonebook_authorized"])
+            self.assertEqual(status["intelx"]["phonebook_target"], "all selectors")
 
     def test_silent_suppresses_progress_findings_and_report_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

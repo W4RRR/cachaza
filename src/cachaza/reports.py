@@ -666,6 +666,55 @@ def build_report_data(
     version: str,
     failures: list[str],
 ) -> dict[str, Any]:
+    source_status: dict[str, Any] = {}
+    source_path = workspace.rest / "ct" / "source-status.json"
+    if source_path.is_file():
+        try:
+            loaded = json.loads(source_path.read_text(encoding="utf-8", errors="replace"))
+            if isinstance(loaded, dict):
+                source_status = loaded
+        except (OSError, json.JSONDecodeError):
+            pass
+    tenant_path = workspace.rest / "tenant-domains" / "status.json"
+    if tenant_path.is_file():
+        try:
+            tenant_targets = json.loads(
+                tenant_path.read_text(encoding="utf-8", errors="replace")
+            )
+            if isinstance(tenant_targets, dict):
+                target_rows = [
+                    row for row in tenant_targets.values() if isinstance(row, dict)
+                ]
+                target_errors = [
+                    row for row in target_rows if row.get("status") == "error"
+                ]
+                target_successes = [
+                    row for row in target_rows if row.get("status") != "error"
+                ]
+                if target_errors and target_successes:
+                    tenant_state = "partial"
+                elif target_errors:
+                    tenant_state = "error"
+                elif any(row.get("status") == "ok" for row in target_rows):
+                    tenant_state = "ok"
+                else:
+                    tenant_state = "empty"
+                related = sum(int(row.get("related_domains", 0)) for row in target_rows)
+                tenant_summary: dict[str, Any] = {
+                    "status": tenant_state,
+                    "retrieved": related,
+                    "added": related,
+                    "targets": tenant_targets,
+                }
+                if target_errors:
+                    tenant_summary["error"] = "; ".join(
+                        f"{root}: {row.get('diagnostic') or 'adapter error'}"
+                        for root, row in tenant_targets.items()
+                        if isinstance(row, dict) and row.get("status") == "error"
+                    )
+                source_status["tenant-domains"] = tenant_summary
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            pass
     provider_status: dict[str, Any] = {}
     provider_path = workspace.rest / "api" / "provider-status.json"
     if provider_path.is_file():
@@ -688,6 +737,11 @@ def build_report_data(
         f"{name}: {status.get('error') or status.get('status')}"
         for name, status in sorted(provider_status.items())
         if isinstance(status, dict) and status.get("status") == "error"
+    ]
+    source_issues = [
+        f"{name}: {status.get('error') or status.get('status')}"
+        for name, status in sorted(source_status.items())
+        if isinstance(status, dict) and status.get("status") in {"error", "partial"}
     ]
     data = {
         "tool": "cachaza",
@@ -712,7 +766,8 @@ def build_report_data(
         },
         "stages": [stage.to_dict() for stage in workspace.stages],
         "failures": list(failures),
-        "issues": list(failures) + provider_issues,
+        "issues": list(failures) + source_issues + provider_issues,
+        "source_status": source_status,
         "provider_status": provider_status,
         "origin_discovery": origin_discovery,
         "findings": [finding.to_dict() for finding in workspace.findings],
@@ -839,6 +894,21 @@ def _render_txt(data: dict[str, Any], *, color: bool = True) -> str:
         if origin.get("message"):
             lines.append(str(origin["message"]))
         lines.append(str(origin.get("warning") or ""))
+
+    section("EXTERNAL SOURCE STATUS")
+    if data.get("source_status"):
+        for source, status in sorted(data["source_status"].items()):
+            details = status if isinstance(status, dict) else {}
+            rendered = str(details.get("status") or "unknown")
+            retrieved = details.get("retrieved", 0)
+            added = details.get("added", 0)
+            error = str(details.get("error") or "").strip()
+            lines.append(
+                f"{source:<16}: {rendered} | retrieved={retrieved} | new={added}"
+                + (f" | {error}" if error else "")
+            )
+    else:
+        lines.append("No external CT source status was recorded.")
 
     section("PROVIDER EXECUTION STATUS")
     if data.get("provider_status"):
@@ -1388,6 +1458,57 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
     stage_rows = [[p(value, "CellHead") for value in ("Stage", "Status", "Details")]]
     stage_rows.extend([[p(item["name"]), p(item["status"]), p(item.get("details", ""))] for item in data["stages"]])
     story.append(LongTable(stage_rows, colWidths=[35 * mm, 30 * mm, 100 * mm], repeatRows=1, style=table_style))
+
+    source_rows = [
+        [p(value, "CellHead") for value in ("External source", "Status", "Retrieved", "New", "Diagnostic")]
+    ]
+    for source, status in sorted(data.get("source_status", {}).items()):
+        if not isinstance(status, dict):
+            continue
+        source_rows.append(
+            [
+                p(source),
+                p(status.get("status", "unknown")),
+                p(status.get("retrieved", 0)),
+                p(status.get("added", 0)),
+                p(status.get("error") or "-"),
+            ]
+        )
+    if len(source_rows) > 1:
+        story.append(Paragraph("External source status", styles["Section"]))
+        story.append(
+            LongTable(
+                source_rows,
+                colWidths=[32 * mm, 23 * mm, 20 * mm, 17 * mm, 73 * mm],
+                repeatRows=1,
+                style=table_style,
+            )
+        )
+
+    provider_rows = [
+        [p(value, "CellHead") for value in ("Provider", "Status", "Findings", "Diagnostic")]
+    ]
+    for provider, status in sorted(data.get("provider_status", {}).items()):
+        if not isinstance(status, dict):
+            continue
+        provider_rows.append(
+            [
+                p(provider),
+                p(status.get("status", "unknown")),
+                p(status.get("findings", 0)),
+                p(status.get("error") or "-"),
+            ]
+        )
+    if len(provider_rows) > 1:
+        story.append(Paragraph("Provider execution status", styles["Section"]))
+        story.append(
+            LongTable(
+                provider_rows,
+                colWidths=[32 * mm, 25 * mm, 22 * mm, 86 * mm],
+                repeatRows=1,
+                style=table_style,
+            )
+        )
 
     inventory_rows = [[p("Type", "CellHead"), p("Count", "CellHead")]]
     inventory_rows.extend([[p(kind), p(count)] for kind, count in data["counts"].items()])

@@ -23,7 +23,7 @@ _________     _____  _________   ___ ___    _____  __________  _____
  \______  /\____|__  /\______  /\___|_  /\____|__  /_______ \____|__  /
         \/         \/        \/       \/         \/        \/       \/
                    github.com/W4RRR/cachaza by W4RRR
-                                v0.10.4
+                                v0.10.5
 ```
 
 Cachaza turns an explicitly defined domain or network scope into a reproducible reconnaissance workspace. It collects passive intelligence first, applies scope decisions to every observation, and requires explicit authorization before direct-contact stages run.
@@ -435,17 +435,38 @@ Common variables include:
 | `CERTSPOTTER_API_KEY` | Optional authenticated Cert Spotter access |
 | `CENSYS_API_KEY` | Native Censys Platform global-search PAT |
 | `CENSYS_ORG_ID` | Optional native Censys organization context |
+| `INTELX_HOST` | Exact IntelX API URL assigned in Account > Developer |
 | `INTELX_API_KEY` | IntelX Phonebook and supported provider configuration |
 | `URLSCAN_API_KEY` | urlscan search |
 | `VT_API_KEY` | Optional VirusTotal historical DNS for Origin discovery |
 | `SECURITYTRAILS_API_KEY` | Optional SecurityTrails/Origin evidence |
 
-The full supported set is documented in `config/providers.example.env`. `CENSYS_API_KEY` is the native Platform PAT; theHarvester's legacy connector uses the separate `CENSYS_API_ID` and `CENSYS_API_SECRET` pair.
+The full supported set is documented in `config/providers.example.env`. `CENSYS_API_KEY` is a
+current Platform Personal Access Token sent as a Bearer token; theHarvester's legacy connector
+uses the separate `CENSYS_API_ID` and `CENSYS_API_SECRET` pair. A Censys `401` means the PAT is
+invalid. A `403` means it was accepted but the account is not entitled to Global Search: Free
+accounts have lookup-only API access, while Starter/Search/Core organization access also requires
+the API Access role and normally `CENSYS_ORG_ID`.
+
+IntelX keys are tied to the API URL shown in the account Developer tab. Set both values exactly;
+for example, a key issued for `https://free.intelx.io` must not be sent to `2.intelx.io`:
+
+```dotenv
+INTELX_HOST=https://free.intelx.io
+INTELX_API_KEY=your_account_key
+```
+
+Before Phonebook search, Cachaza calls IntelX `/authenticate/info` and verifies that the key is
+authorized for `/phonebook/search`. Phonebook uses `target=0` so domains, email addresses, and URLs
+are all eligible instead of requesting email selectors only.
 
 > [!WARNING]
 > Provider coverage depends on credentials, account permissions, indexing, and quotas. `-shodan-mode count` avoids search-result credits; `search` retrieves results and may consume credits. `doctor` confirms that a value is present, not that the provider accepts it.
 
-Each run records native provider outcomes and safe diagnostics under `rest/api/provider-status.json`. Missing tools or credentials can produce an incomplete inventory without invalidating evidence collected from other sources.
+Each run records native provider outcomes and safe diagnostics under `rest/api/provider-status.json`.
+Certificate Transparency availability, retrieved-name counts, and newly added evidence counts are
+recorded separately under `rest/ct/source-status.json`. Missing tools, credentials, or one degraded
+source can produce an incomplete inventory without invalidating evidence collected elsewhere.
 
 ## VPN-safe network policy
 

@@ -7,6 +7,7 @@ import json
 import os
 import socket
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from html.parser import HTMLParser
 from pathlib import Path
@@ -30,8 +31,7 @@ CERTSPOTTER_ISSUANCES = "https://api.certspotter.com/v1/issuances"
 IPRANGES_BASE = "https://raw.githubusercontent.com/lord-alfred/ipranges/main"
 CENSYS_SEARCH = "https://api.platform.censys.io/v3/global/search/query"
 URLSCAN_SEARCH = "https://urlscan.io/api/v1/search/"
-INTELX_PHONEBOOK_SEARCH = "https://2.intelx.io/phonebook/search"
-INTELX_PHONEBOOK_RESULT = "https://2.intelx.io/phonebook/search/result"
+INTELX_DEFAULT_HOST = "https://2.intelx.io"
 
 CLOUD_PROVIDERS = {
     "amazon": "amazon",
@@ -46,38 +46,122 @@ CLOUD_PROVIDERS = {
 }
 
 
+def normalize_intelx_host(host: str) -> str:
+    """Normalize the account-specific IntelX API URL without guessing its tier."""
+    base = host.strip().rstrip("/") or INTELX_DEFAULT_HOST
+    if "://" not in base:
+        base = "https://" + base
+    return base
+
+
+def intelx_auth_info(
+    *,
+    api_key: str,
+    host: str = INTELX_DEFAULT_HOST,
+    timeout: int,
+    retries: int,
+) -> dict[str, Any]:
+    """Validate an IntelX key/host pair and return its advertised capabilities."""
+    if not api_key:
+        raise HttpError("INTELX_API_KEY is not configured")
+    base = normalize_intelx_host(host)
+    payload = request_json(
+        f"{base}/authenticate/info",
+        headers={"x-key": api_key, "Accept": "application/json"},
+        timeout=timeout,
+        retries=retries,
+    )
+    if not isinstance(payload, dict):
+        raise HttpError("IntelX authentication endpoint returned an invalid response")
+    return payload
+
+
+def intelx_capability_paths(payload: dict[str, Any]) -> set[str]:
+    """Return normalized API paths from current and legacy capability shapes."""
+    raw_paths = payload.get("paths", {})
+    candidates: list[Any] = []
+    if isinstance(raw_paths, dict):
+        candidates.extend(raw_paths)
+        candidates.extend(raw_paths.values())
+    elif isinstance(raw_paths, list):
+        candidates.extend(raw_paths)
+    elif isinstance(raw_paths, str):
+        candidates.append(raw_paths)
+
+    paths: set[str] = set()
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            candidate = candidate.get("path") or candidate.get("name") or candidate.get("url")
+        if not isinstance(candidate, str) or not candidate.strip():
+            continue
+        value = candidate.strip()
+        if "://" in value:
+            value = "/" + value.split("://", 1)[1].split("/", 1)[-1]
+        if not value.startswith("/"):
+            value = "/" + value
+        paths.add(value.rstrip("/"))
+    return paths
+
+
 def intelx_phonebook(
     domain: str,
     *,
     api_key: str,
-    host: str = "https://2.intelx.io",
+    host: str = INTELX_DEFAULT_HOST,
     timeout: int,
     retries: int,
+    target: int = 0,
 ) -> dict[str, Any]:
     """Run an IntelX Phonebook lookup and return raw selectors plus normalized values."""
-    base = host.rstrip("/") or "https://2.intelx.io"
-    if "://" not in base:
-        base = "https://" + base
+    if not api_key:
+        raise HttpError("INTELX_API_KEY is not configured")
+    if target not in {0, 1, 2, 3}:
+        raise ValueError("IntelX Phonebook target must be 0, 1, 2, or 3")
+    base = normalize_intelx_host(host)
     headers = {"x-key": api_key, "Accept": "application/json"}
     search = request_json(
         f"{base}/phonebook/search",
         headers=headers,
         method="POST",
-        json_body={"term": domain, "maxresults": 1000, "media": 0, "target": 2, "terminate": []},
+        json_body={
+            "term": domain,
+            "maxresults": 1000,
+            "media": 0,
+            "target": target,
+            "terminate": [],
+        },
         timeout=timeout,
         retries=retries,
     )
     search_id = search.get("id") if isinstance(search, dict) else None
     if not search_id:
         raise HttpError("IntelX did not return a Phonebook search id")
-    result = request_json(
-        f"{base}/phonebook/search/result",
-        headers=headers,
-        params={"id": str(search_id), "limit": 1000},
-        timeout=timeout,
-        retries=retries,
-    )
-    selectors = result.get("selectors", []) if isinstance(result, dict) else []
+    selectors: list[dict[str, Any]] = []
+    result: Any = {}
+    for poll in range(6):
+        result = request_json(
+            f"{base}/phonebook/search/result",
+            headers=headers,
+            params={"id": str(search_id), "limit": 1000, "offset": -1},
+            timeout=timeout,
+            retries=retries,
+        )
+        if not isinstance(result, dict):
+            break
+        current = result.get("selectors", [])
+        if isinstance(current, list):
+            selectors.extend(row for row in current if isinstance(row, dict))
+        status = result.get("status")
+        if status in {1, 2}:
+            break
+        if status == 3:
+            if poll < 5:
+                time.sleep(1)
+            continue
+        if status != 0:
+            break
+    result_payload = dict(result) if isinstance(result, dict) else {"raw": result}
+    result_payload["selectors"] = selectors
     values = sorted(
         {
             str(row.get("selectorvalue") or row.get("value") or "").strip()
@@ -86,7 +170,7 @@ def intelx_phonebook(
         },
         key=str.casefold,
     )
-    return {"search": search, "result": result, "values": values}
+    return {"search": search, "result": result_payload, "values": values, "target": target}
 
 
 def resolve_domain_ips(domain: str) -> list[str]:
@@ -442,6 +526,12 @@ def censys_search(
 ) -> dict[str, Any]:
     if not api_key:
         raise HttpError("CENSYS_API_KEY is not configured")
+    if ":" in api_key:
+        raise HttpError(
+            "CENSYS_API_KEY looks like a legacy API ID/secret pair; "
+            "the Platform API requires a Personal Access Token",
+            status_code=401,
+        )
     params: dict[str, str | int] | None = None
     if organization_id:
         params = {"organization_id": organization_id}

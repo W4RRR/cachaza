@@ -8,14 +8,18 @@ from unittest.mock import patch
 from cachaza.http import GLOBAL_REQUEST_LIMITER, HttpError, request_bytes
 from cachaza.sources import (
     censys_query,
+    censys_search,
     certspotter_domains,
     extract_censys_indicators,
+    intelx_auth_info,
+    intelx_capability_paths,
+    intelx_phonebook,
     normalize_urlscan,
+    normalize_intelx_host,
     parse_arin_rdap,
     parse_bgp_he_dns_html,
     ripe_as_overview,
     ripe_network_info,
-    intelx_phonebook,
 )
 
 
@@ -26,10 +30,65 @@ class SourceTests(unittest.TestCase):
             {"selectors": [{"selectorvalue": "Admin@Example.com"}, {"selectorvalue": "www.example.com"}]},
         ]
         with patch("cachaza.sources.request_json", side_effect=responses) as request:
-            result = intelx_phonebook("example.com", api_key="secret", timeout=20, retries=1)
+            result = intelx_phonebook(
+                "example.com",
+                api_key="secret",
+                host="https://free.intelx.io/",
+                timeout=20,
+                retries=1,
+            )
         self.assertEqual(result["values"], ["Admin@Example.com", "www.example.com"])
+        self.assertEqual(result["target"], 0)
+        self.assertEqual(request.call_args_list[0].args[0], "https://free.intelx.io/phonebook/search")
         self.assertEqual(request.call_args_list[0].kwargs["headers"]["x-key"], "secret")
+        self.assertEqual(request.call_args_list[0].kwargs["json_body"]["target"], 0)
         self.assertEqual(request.call_args_list[1].kwargs["params"]["id"], "search-id")
+
+    def test_intelx_auth_info_uses_account_specific_host(self) -> None:
+        capabilities = {"paths": {"/phonebook/search": {"credit": 25}}}
+        with patch("cachaza.sources.request_json", return_value=capabilities) as request:
+            result = intelx_auth_info(
+                api_key="secret",
+                host="free.intelx.io",
+                timeout=20,
+                retries=1,
+            )
+        self.assertEqual(result, capabilities)
+        self.assertEqual(request.call_args.args[0], "https://free.intelx.io/authenticate/info")
+        self.assertEqual(request.call_args.kwargs["headers"]["x-key"], "secret")
+
+    def test_intelx_host_normalization_preserves_assigned_tier(self) -> None:
+        self.assertEqual(normalize_intelx_host("free.intelx.io/"), "https://free.intelx.io")
+        self.assertEqual(
+            normalize_intelx_host("https://2.intelx.io/"), "https://2.intelx.io"
+        )
+
+    def test_intelx_capability_paths_accepts_dict_and_list_shapes(self) -> None:
+        self.assertEqual(
+            intelx_capability_paths({"paths": {"/phonebook/search": {"credit": 25}}}),
+            {"/phonebook/search"},
+        )
+        self.assertEqual(
+            intelx_capability_paths(
+                {"paths": [{"path": "phonebook/search"}, "/authenticate/info"]}
+            ),
+            {"/phonebook/search", "/authenticate/info"},
+        )
+
+    def test_censys_rejects_legacy_id_secret_pair_before_request(self) -> None:
+        with (
+            patch("cachaza.sources.request_json") as request,
+            self.assertRaises(HttpError) as caught,
+        ):
+            censys_search(
+                "example.com",
+                api_key="legacy-id:legacy-secret",
+                timeout=20,
+                retries=1,
+            )
+        self.assertEqual(caught.exception.status_code, 401)
+        self.assertIn("Personal Access Token", str(caught.exception))
+        request.assert_not_called()
 
     def test_censys_query_and_scope_extraction(self) -> None:
         self.assertIn("web.hostname=~", censys_query("example.com"))

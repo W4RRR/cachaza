@@ -61,6 +61,13 @@ Stages are isolated by default. A source or adapter failure is recorded in the m
 
 Provider-level errors that do not abort the API stage remain visible in `rest/api/provider-status.json`, the HTML report, the run-issues metric, and the terminal summary. A completed stage therefore means orchestration completed; it does not imply every configured provider authenticated successfully.
 
+Certificate Transparency sources are tracked independently in `rest/ct/source-status.json`. The
+status distinguishes an empty but valid response from timeouts, HTTP 429 rate limiting, and remote
+5xx failures, and reports both names retrieved and new evidence added. Cert Spotter and crt.sh are
+fault-isolated; crt.sh receives a 30-second minimum timeout and up to two configured retries. The
+tenant-domains adapter records the upstream script's explicit `No results found`/exit-1 combination
+as an empty result rather than a stage failure.
+
 `-fresh` is deliberately constrained: Cachaza verifies `rest/scope.json`, confirms an identical target specification, and only then resets that workspace.
 
 ## Automatic Origin discovery methodology

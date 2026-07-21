@@ -128,6 +128,20 @@ def render_html(data: dict[str, Any]) -> str:
                 if isinstance(status, dict)
             ],
         ),
+        "__SOURCE_TABLE__": _table(
+            ["Source", "Status", "Retrieved", "New", "Diagnostic"],
+            [
+                [
+                    source,
+                    str(status.get("status") or "unknown"),
+                    str(status.get("retrieved", 0)),
+                    str(status.get("added", 0)),
+                    str(status.get("error") or "-"),
+                ]
+                for source, status in sorted(data.get("source_status", {}).items())
+                if isinstance(status, dict)
+            ],
+        ),
         "__ORIGIN_TABLE__": _table(
             ["IP", "Initial score", "Final score", "Classification", "Group", "Rejection reason"],
             origin_rows,
@@ -241,7 +255,8 @@ main{max-width:1280px;margin:auto;padding:38px 24px 70px}header{border:1px solid
 <details class="section"><summary>Prefixes</summary><div class="section-body">__PREFIX_TABLE__</div></details>
 <details class="section"><summary>Resolved addresses</summary><div class="section-body">__IP_TABLE__</div></details>
 <details class="section"><summary>Network registrations</summary><div class="section-body">__REGISTRATION_TABLE__</div></details>
-<details class="section"><summary>Provider execution status</summary><div class="section-body"><p class="section-note">Credential presence is not acceptance. A 401 diagnostic means the provider rejected the configured credential or account access.</p>__PROVIDER_TABLE__</div></details>
+<details class="section"><summary>External source status</summary><div class="section-body"><p class="section-note">Retrieved counts what a CT source returned; New counts evidence records added to this workspace. Empty is a valid response, while partial/error identifies a source availability issue.</p>__SOURCE_TABLE__</div></details>
+<details class="section"><summary>Provider execution status</summary><div class="section-body"><p class="section-note">Credential presence is not acceptance. Censys 401 means an invalid Platform PAT; 403 means the accepted account is not entitled to the requested endpoint. IntelX keys must be used with the exact API URL assigned in the Developer tab.</p>__PROVIDER_TABLE__</div></details>
 <details class="section"><summary>Execution stages</summary><div class="section-body">__STAGE_TABLE__</div></details>
 </main><script type="application/json" id="report-data">__REPORT_JSON__</script><script>
 (() => {

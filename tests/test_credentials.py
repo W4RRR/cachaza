@@ -38,6 +38,15 @@ class CredentialTests(unittest.TestCase):
             self.assertIn('"token"', path.read_text(encoding="utf-8"))
         self.assertFalse(path.exists())
 
+    def test_subfinder_intelx_host_accepts_developer_tab_url(self) -> None:
+        providers = subfinder_provider_values(
+            {
+                "INTELX_API_KEY": "intel-key",
+                "INTELX_HOST": "https://free.intelx.io/",
+            }
+        )
+        self.assertEqual(providers["intelx"], "free.intelx.io:intel-key")
+
     def test_harvester_home_maps_single_key_providers_without_touching_home(self) -> None:
         with temporary_harvester_home(
             {"INTELX_API_KEY": "intel-key", "PDCP_API_KEY": "pd-key"}

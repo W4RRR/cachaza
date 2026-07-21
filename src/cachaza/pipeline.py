@@ -45,9 +45,12 @@ from .sources import (
     classify_cloud_value,
     crtsh_domains,
     fetch_cloud_ranges,
+    intelx_auth_info,
+    intelx_capability_paths,
     load_fingerprint_file,
     intelx_phonebook,
     manual_osint_markdown,
+    normalize_intelx_host,
     parse_json_lines,
     resolve_domain_ips,
     ripe_as_overview,
@@ -75,6 +78,21 @@ from .adapters import (
     vulnx,
     waf,
 )
+
+
+def _http_failure_kind(exc: HttpError) -> str:
+    """Classify a provider failure without exposing request parameters."""
+    status = exc.status_code
+    message = str(exc).casefold()
+    if status == 429:
+        return "rate_limited"
+    if status is not None and status >= 500:
+        return "remote_5xx"
+    if "timed out" in message or "timeout" in message:
+        return "timeout"
+    if status is not None:
+        return f"http_{status}"
+    return "network_error"
 
 
 @dataclass(slots=True)
@@ -645,10 +663,11 @@ class Pipeline:
             return "tenant-domains is unavailable; stage skipped"
         executable = binary or self.options.tenant_script or "tenant-domains.sh"
         count = 0
+        empty_count = 0
+        failure_count = 0
+        source_status: dict[str, dict[str, Any]] = {}
         for root in self.target.domains:
             argv = [executable, "-d", root]
-            if not self.console.verbose:
-                argv.append("-s")
             if executable.endswith(".sh") and Path(executable).is_file() and not os.access(executable, os.X_OK):
                 argv.insert(0, "bash")
             result = self.runner.run(argv)
@@ -663,14 +682,36 @@ class Pipeline:
             )
             if result.returncode != 0:
                 diagnostic = result.stderr.strip() or result.stdout.strip()
+                if "no results found" in diagnostic.casefold():
+                    empty_count += 1
+                    source_status[root] = {
+                        "status": "empty",
+                        "related_domains": 0,
+                        "diagnostic": (
+                            "No related Microsoft 365 tenant domains were observed. "
+                            "The upstream script uses exit 1 for this normal empty result."
+                        ),
+                    }
+                    self.console.info(
+                        f"tenant-domains returned no related Microsoft 365 domains for {root}; "
+                        "recorded as an empty result, not a stage failure"
+                    )
+                    continue
                 if not diagnostic:
                     diagnostic = "the process returned no stdout or stderr"
+                failure_count += 1
+                source_status[root] = {
+                    "status": "error",
+                    "exit_code": result.returncode,
+                    "diagnostic": diagnostic[:1_000],
+                }
                 self.console.warn(
                     f"tenant-domains failed for {root} (exit {result.returncode}): "
                     f"{diagnostic[:300]}. Raw stdout/stderr were saved under "
                     "rest/tenant-domains/."
                 )
                 continue
+            root_count = 0
             for domain in extract_domains(result.stdout):
                 in_scope = domain_in_scope(domain, self.target.domains, self.target.exclude_domains)
                 if self._add(
@@ -682,61 +723,116 @@ class Pipeline:
                     {"tenant_seed": root, "requires_scope_approval": not in_scope},
                 ):
                     count += 1
-        return f"{count} related domains; additional apex domains require explicit scope approval"
+                    root_count += 1
+            source_status[root] = {
+                "status": "ok" if root_count else "empty",
+                "related_domains": root_count,
+            }
+            if not root_count:
+                empty_count += 1
+        self.workspace.write_json("tenant-domains/status.json", source_status)
+        return (
+            f"{count} related domains; {empty_count} seed(s) returned no relations; "
+            f"{failure_count} adapter failure(s); additional apex domains require explicit scope approval"
+        )
 
     def stage_ct(self) -> str:
         if self.options.dry_run:
             return "dry run: CT queries skipped"
-        total = 0
-        source_counts: dict[str, int] = {"certspotter": 0, "crt.sh": 0}
+        source_status: dict[str, dict[str, Any]] = {
+            "certspotter": {"status": "pending", "retrieved": 0, "added": 0, "targets": {}},
+            "crt.sh": {"status": "pending", "retrieved": 0, "added": 0, "targets": {}},
+        }
+
+        def record_success(source: str, root: str, names: list[str]) -> None:
+            added = 0
+            for name in names:
+                if self._add("ct", source, "domain", name, True, {"root": root}):
+                    added += 1
+            target_status = "ok" if names else "empty"
+            source_status[source]["retrieved"] += len(names)
+            source_status[source]["added"] += added
+            source_status[source]["targets"][root] = {
+                "status": target_status,
+                "retrieved": len(names),
+                "added": added,
+            }
+            if not names:
+                self.console.info(f"{source} returned no CT names for {root}")
+
+        def record_failure(source: str, root: str, exc: HttpError) -> None:
+            kind = _http_failure_kind(exc)
+            source_status[source]["targets"][root] = {
+                "status": "error",
+                "error_kind": kind,
+                "http_status": exc.status_code,
+                "transient": exc.transient,
+                "error": str(exc),
+            }
+            if kind == "timeout":
+                explanation = "request timed out"
+            elif kind == "rate_limited":
+                explanation = "remote service rate limit (HTTP 429)"
+            elif kind == "remote_5xx":
+                explanation = f"remote service failure (HTTP {exc.status_code or '5xx'})"
+            else:
+                explanation = kind.replace("_", " ")
+            self.console.warn(
+                f"{source} unavailable for {root}: {explanation}: {exc}. "
+                "Continuing with the other CT source."
+            )
+
         for root in self.target.domains:
-            successful_sources = 0
             try:
                 names = certspotter_domains(
                     root, timeout=self.options.timeout, retries=self.options.retries
                 )
             except HttpError as exc:
-                self.console.warn(f"Cert Spotter unavailable for {root}: {exc}")
+                record_failure("certspotter", root, exc)
                 if self.options.strict:
                     raise
             else:
-                successful_sources += 1
-                for name in names:
-                    if self._add("ct", "certspotter", "domain", name, True, {"root": root}):
-                        source_counts["certspotter"] += 1
-                        total += 1
+                record_success("certspotter", root, names)
 
             try:
                 names = crtsh_domains(
                     root,
-                    timeout=min(self.options.timeout, 8),
-                    retries=0,
+                    timeout=max(self.options.timeout, 30),
+                    retries=min(self.options.retries, 2),
                 )
             except HttpError as exc:
-                transient_note = (
-                    " Remote transient 502/5xx response; this is a crt.sh service failure, "
-                    "not a local credential or MTU error."
-                    if exc.status_code == 502 or "502" in str(exc)
-                    else ""
-                )
-                self.console.warn(
-                    f"crt.sh unavailable for {root}: {exc}.{transient_note} "
-                    "Continuing with Cert Spotter results."
-                )
+                record_failure("crt.sh", root, exc)
                 if self.options.strict:
                     raise
             else:
-                successful_sources += 1
-                for name in names:
-                    if self._add("ct", "crt.sh", "domain", name, True, {"root": root}):
-                        source_counts["crt.sh"] += 1
-                        total += 1
-            if not successful_sources:
-                self.console.warn(f"No CT source returned data for {root}")
-        return (
-            f"{total} CT findings added "
-            f"(Cert Spotter: {source_counts['certspotter']}, crt.sh: {source_counts['crt.sh']})"
+                record_success("crt.sh", root, names)
+
+        for source, status in source_status.items():
+            targets = list(status["targets"].values())
+            failures = [item for item in targets if item.get("status") == "error"]
+            successes = [item for item in targets if item.get("status") != "error"]
+            if failures and successes:
+                status["status"] = "partial"
+            elif failures:
+                status["status"] = "error"
+            elif status["retrieved"]:
+                status["status"] = "ok"
+            else:
+                status["status"] = "empty"
+            if failures:
+                status["error"] = "; ".join(
+                    f"{root}: {details.get('error_kind', 'error')}"
+                    for root, details in status["targets"].items()
+                    if details.get("status") == "error"
+                )
+        self.workspace.write_json("ct/source-status.json", source_status)
+        retrieved = sum(int(status["retrieved"]) for status in source_status.values())
+        added = sum(int(status["added"]) for status in source_status.values())
+        source_summary = ", ".join(
+            f"{source}: {status['retrieved']} retrieved/{status['added']} new/{status['status']}"
+            for source, status in source_status.items()
         )
+        return f"{retrieved} CT names retrieved; {added} new findings ({source_summary})"
 
     def stage_api(self) -> str:
         if self.options.dry_run:
@@ -747,7 +843,17 @@ class Pipeline:
         for root in self.target.domains:
             censys_key = self.credentials.get("CENSYS_API_KEY", "").strip()
             if censys_key:
-                provider_status.setdefault("censys", {"configured": True, "status": "pending", "findings": 0})
+                provider_status.setdefault(
+                    "censys",
+                    {
+                        "configured": True,
+                        "status": "pending",
+                        "findings": 0,
+                        "organization_context": bool(
+                            self.credentials.get("CENSYS_ORG_ID", "").strip()
+                        ),
+                    },
+                )
                 try:
                     result = censys_search(
                         root,
@@ -786,14 +892,25 @@ class Pipeline:
                     forbidden = status_code == 403 or "403" in message
                     if unauthorized:
                         action = (
-                            "Regenerate a current Censys Platform personal access token and place it only in "
-                            "CENSYS_API_KEY; legacy CENSYS_API_ID/CENSYS_API_SECRET values are not valid here. "
-                            "For organization access, also verify the API Access role. CENSYS_ORG_ID is optional."
+                            "Censys rejected the Authorization token. Create a current Platform Personal Access "
+                            "Token and place it only in CENSYS_API_KEY; legacy CENSYS_API_ID/CENSYS_API_SECRET "
+                            "values are not valid for this endpoint. CENSYS_ORG_ID is optional and cannot fix a 401."
                         )
                     elif forbidden:
                         action = (
-                            "The credential was accepted but lacks permission for Global Search; verify the "
-                            "Censys subscription, organization, and API Access role."
+                            "The token was accepted but Global Search is not entitled. Censys Free supports "
+                            "asset lookup only; Global Search requires Starter, Search, or Core. Organization "
+                            "users must also have the API Access role and the correct CENSYS_ORG_ID."
+                        )
+                    elif status_code == 404:
+                        action = (
+                            "Censys could not expose the requested resource in this account context; verify "
+                            "the organization selection and permissions associated with the PAT."
+                        )
+                    elif status_code == 422:
+                        action = (
+                            "Censys accepted authentication but rejected the query or organization context; "
+                            "verify CENSYS_ORG_ID and the current CenQL field syntax."
                         )
                     else:
                         action = "Retry later if the provider reports a transient 429/5xx response."
@@ -809,14 +926,41 @@ class Pipeline:
 
             intelx_key = self.credentials.get("INTELX_API_KEY", "").strip()
             if intelx_key:
-                provider_status.setdefault("intelx", {"configured": True, "status": "pending", "findings": 0})
+                intelx_host = normalize_intelx_host(
+                    self.credentials.get("INTELX_HOST", "")
+                )
+                provider_status.setdefault(
+                    "intelx",
+                    {
+                        "configured": True,
+                        "status": "pending",
+                        "findings": 0,
+                        "host": intelx_host,
+                    },
+                )
                 try:
+                    capabilities = intelx_auth_info(
+                        api_key=intelx_key,
+                        host=intelx_host,
+                        timeout=max(self.options.timeout, 30),
+                        retries=self.options.retries,
+                    )
+                    paths = intelx_capability_paths(capabilities)
+                    phonebook_access = "/phonebook/search" in paths
+                    provider_status["intelx"]["phonebook_authorized"] = phonebook_access
+                    if not phonebook_access:
+                        raise HttpError(
+                            "IntelX authenticated the key, but /phonebook/search is not listed "
+                            "in its capabilities",
+                            status_code=403,
+                        )
                     result = intelx_phonebook(
                         root,
                         api_key=intelx_key,
-                        host=self.credentials.get("INTELX_HOST", "").strip() or "https://2.intelx.io",
+                        host=intelx_host,
                         timeout=max(self.options.timeout, 30),
                         retries=self.options.retries,
+                        target=0,
                     )
                     self.workspace.write_json(f"api/intelx-{root}.json", result["result"])
                     for value in result["values"]:
@@ -837,7 +981,11 @@ class Pipeline:
                         for domain in extract_domains(value, self.target.domains):
                             if self._add("api", "intelx", "domain", domain, True, {"root": root, "passive": True}):
                                 counts["intelx"] += 1
-                    provider_status["intelx"].update(status="ok", findings=counts["intelx"])
+                    provider_status["intelx"].update(
+                        status="ok",
+                        findings=counts["intelx"],
+                        phonebook_target="all selectors",
+                    )
                 except (HttpError, OSError, ValueError) as exc:
                     message = str(exc)
                     status_code = getattr(exc, "status_code", None)
@@ -845,8 +993,9 @@ class Pipeline:
                     forbidden = status_code == 403 or "403" in message
                     if unauthorized:
                         action = (
-                            "Verify that INTELX_API_KEY is current and belongs to the INTELX_HOST account; "
-                            "the account must include Phonebook API access."
+                            "The IntelX key and API host do not authenticate together. Set INTELX_HOST to the "
+                            "exact URL shown in the account Developer tab (for example free.intelx.io or "
+                            "2.intelx.io), then verify INTELX_API_KEY."
                         )
                     elif forbidden:
                         action = (

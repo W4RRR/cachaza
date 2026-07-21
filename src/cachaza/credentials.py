@@ -59,6 +59,8 @@ def _composite(values: dict[str, str], left: tuple[str, ...], right: tuple[str, 
 
 def subfinder_provider_values(values: dict[str, str]) -> dict[str, str]:
     intelx_key = _first(values, "INTELX_API_KEY")
+    intelx_host = _first(values, "INTELX_HOST") or "2.intelx.io"
+    intelx_host = re.sub(r"^https?://", "", intelx_host, flags=re.IGNORECASE).rstrip("/")
     return {
         "bevigil": _first(values, "BEVIGIL_API_KEY"),
         "binaryedge": _first(values, "BINARYEDGE_API_KEY"),
@@ -70,7 +72,7 @@ def subfinder_provider_values(values: dict[str, str]) -> dict[str, str]:
         "fullhunt": _first(values, "FULLHUNT_API_KEY"),
         "github": _first(values, "GITHUB_TOKEN"),
         "hunter": _first(values, "HUNTER_API_KEY"),
-        "intelx": f"{_first(values, 'INTELX_HOST') or '2.intelx.io'}:{intelx_key}" if intelx_key else "",
+        "intelx": f"{intelx_host}:{intelx_key}" if intelx_key else "",
         "passivetotal": _composite(
             values, ("PASSIVETOTAL_USERNAME",), ("PASSIVETOTAL_KEY",)
         ),
