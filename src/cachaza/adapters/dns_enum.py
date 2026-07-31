@@ -20,6 +20,24 @@ TRANSFER_SUCCESS = re.compile(
 TRANSFER_FAILURE = re.compile(r"failed|failure|refused|denied|not allowed|no zone transfer", re.IGNORECASE)
 
 
+def build_argv(binary: str, tool: str, root: str, *, query_timeout: int) -> list[str]:
+    """Build bounded commands for the dnsenum and current Kali Fierce CLIs."""
+    if tool == "dnsenum":
+        return [
+            binary,
+            "--nocolor",
+            "--noreverse",
+            "--threads",
+            "2",
+            "--timeout",
+            str(max(1, min(query_timeout, 10))),
+            root,
+        ]
+    if tool == "fierce":
+        return [binary, "--domain", root, "--delay", "0.5"]
+    raise ValueError(f"unsupported DNS enumeration adapter: {tool}")
+
+
 def parse_output(text: str, tool: str, root: str, target: TargetSpec) -> list[Finding]:
     findings: list[Finding] = []
     cleaned = clean_text(text, 2_000_000)

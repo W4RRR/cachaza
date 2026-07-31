@@ -12,12 +12,14 @@ from cachaza.adapters import blackwidow, contacts, dns_enum, harvester, waf
 from cachaza.cli import main
 from cachaza.console import CACHAZA_WORDMARK, Console
 from cachaza.models import Finding, TargetSpec
+from cachaza.pipeline import Pipeline, RunOptions
 from cachaza.reports import (
     build_key_findings,
     build_subdomain_summary,
     render_key_findings_console,
 )
 from cachaza.update import is_newer, offer_update, perform_update, version_key
+from cachaza.workspace import RunWorkspace
 
 
 class SpecializedAdapterTests(unittest.TestCase):
@@ -134,6 +136,29 @@ class SpecializedAdapterTests(unittest.TestCase):
             self.target,
         )
         self.assertNotIn("dns_zone_transfer", {item.kind for item in failed})
+
+    def test_dns_enum_builds_bounded_current_kali_commands(self) -> None:
+        self.assertEqual(
+            dns_enum.build_argv(
+                "dnsenum", "dnsenum", "example.com", query_timeout=20
+            ),
+            [
+                "dnsenum",
+                "--nocolor",
+                "--noreverse",
+                "--threads",
+                "2",
+                "--timeout",
+                "10",
+                "example.com",
+            ],
+        )
+        self.assertEqual(
+            dns_enum.build_argv(
+                "fierce", "fierce", "example.com", query_timeout=20
+            ),
+            ["fierce", "--domain", "example.com", "--delay", "0.5"],
+        )
 
     def test_key_findings_limit_wording_and_zone_warning(self) -> None:
         findings = [
@@ -260,8 +285,11 @@ class SpecializedCliTests(unittest.TestCase):
             self.assertIn("subfinder -d example.com -all -oJ -cs -rl 1 -t 1", commands)
             self.assertIn("assetfinder --subs-only example.com", commands)
             self.assertIn("theHarvester -d example.com", commands)
-            self.assertIn("dnsenum example.com", commands)
-            self.assertIn("fierce -dns example.com", commands)
+            self.assertIn(
+                "dnsenum --nocolor --noreverse --threads 2 --timeout 10 example.com",
+                commands,
+            )
+            self.assertIn("fierce --domain example.com --delay 0.5", commands)
             self.assertIn("wafw00f https://example.com -a", commands)
             self.assertIn("http/technologies/waf-detect.yaml", commands)
             self.assertIn(
@@ -292,7 +320,11 @@ class SpecializedCliTests(unittest.TestCase):
             manifest = json.loads((root / "rest" / "manifest.json").read_text(encoding="utf-8"))
             commands = [item["command"] for item in manifest["external_commands"]]
             stages = [item["name"] for item in manifest["stages"]]
-            dnsenum_index = next(index for index, command in enumerate(commands) if "dnsenum example.com" in command)
+            dnsenum_index = next(
+                index
+                for index, command in enumerate(commands)
+                if command.startswith("dnsenum ") and command.endswith(" example.com")
+            )
             dnsx_index = next(index for index, command in enumerate(commands) if command.startswith("dnsx "))
             self.assertLess(dnsenum_index, dnsx_index)
             self.assertLess(stages.index("dns_enum"), stages.index("dns"))
@@ -301,6 +333,46 @@ class SpecializedCliTests(unittest.TestCase):
                 status = next(item["status"] for item in manifest["stages"] if item["name"] == stage)
                 self.assertEqual(status, "completed")
             self.assertIn("-wd example.com", commands[dnsx_index])
+
+    def test_dns_enumeration_runtime_limit_is_validated(self) -> None:
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            code = main(
+                [
+                    "run",
+                    "-d",
+                    "example.com",
+                    "-dns-enum",
+                    "-active",
+                    "-dns-enum-max-runtime",
+                    "10",
+                    "-dry-run",
+                ]
+            )
+        self.assertEqual(code, 2)
+        self.assertIn("between 30 and 3600", errors.getvalue())
+
+    def test_dns_runtime_limit_invalidates_only_dns_enum_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            target = TargetSpec(domains=["example.com"])
+            workspace = RunWorkspace.create(Path(temp) / "run", target)
+            first = Pipeline(
+                target,
+                workspace,
+                RunOptions(dry_run=True, dns_enum_max_runtime=300),
+                Console(silent=True),
+            )
+            second = Pipeline(
+                target,
+                workspace,
+                RunOptions(dry_run=True, dns_enum_max_runtime=600),
+                Console(silent=True),
+            )
+            self.assertEqual(first._stage_cache_key("api"), second._stage_cache_key("api"))
+            self.assertNotEqual(
+                first._stage_cache_key("dns_enum"),
+                second._stage_cache_key("dns_enum"),
+            )
 
     def test_help_mentions_update_and_specialized_shortcuts(self) -> None:
         output = io.StringIO()

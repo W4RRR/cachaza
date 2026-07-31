@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import shlex
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -86,6 +88,33 @@ def display_command(argv: list[str]) -> str:
     return shlex.join(argv)
 
 
+def _subprocess_group_options() -> dict[str, object]:
+    """Start external tools in an isolated process group on POSIX.
+
+    Several adapters launch scripts that can create helper processes. Killing only
+    the top-level process on timeout can leave a helper holding stdout/stderr open,
+    which makes the pipeline appear to remain stuck after the timeout fired.
+    """
+    return {"start_new_session": True} if os.name == "posix" else {}
+
+
+def _kill_process_tree(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+            return
+        except ProcessLookupError:
+            return
+        except OSError:
+            pass
+    try:
+        process.kill()
+    except ProcessLookupError:
+        pass
+
+
 class CommandRunner:
     def __init__(self, console: Console, *, dry_run: bool = False, timeout: int = 300):
         self.console = console
@@ -153,24 +182,25 @@ class CommandRunner:
         cwd: Path | None,
         env: dict[str, str] | None,
     ) -> CommandResult:
+        process = subprocess.Popen(
+            argv,
+            stdin=subprocess.PIPE if input_text is not None else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=str(cwd) if cwd else None,
+            env=constrained_environment(env),
+            shell=False,
+            **_subprocess_group_options(),
+        )
         try:
-            completed = subprocess.run(
-                argv,
-                input=input_text,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout,
-                cwd=str(cwd) if cwd else None,
-                env=constrained_environment(env),
-                shell=False,
-                check=False,
-            )
-            return CommandResult(argv, completed.returncode, completed.stdout, completed.stderr)
-        except subprocess.TimeoutExpired as exc:
-            stdout = exc.stdout.decode("utf-8", "replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-            stderr = exc.stderr.decode("utf-8", "replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+            stdout, stderr = process.communicate(input=input_text, timeout=timeout)
+            return CommandResult(argv, process.returncode, stdout, stderr)
+        except subprocess.TimeoutExpired:
+            _kill_process_tree(process)
+            stdout, stderr = process.communicate()
             return CommandResult(argv, 124, stdout, stderr + "\nCommand timed out")
 
     def _run_streaming(
@@ -193,6 +223,7 @@ class CommandRunner:
             cwd=str(cwd) if cwd else None,
             env=constrained_environment(env),
             shell=False,
+            **_subprocess_group_options(),
         )
         stdout_lines: list[str] = []
         stderr_lines: list[str] = []
@@ -222,7 +253,7 @@ class CommandRunner:
             returncode = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
-            process.kill()
+            _kill_process_tree(process)
             returncode = 124
             process.wait()
         for thread in threads:

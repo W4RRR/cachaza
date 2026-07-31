@@ -504,6 +504,13 @@ cachaza run -d example.com -profile full -active -ports 80,443,8080,8443 -rate-l
 
 All active bundles require written authorization and `-active`. The `full` profile already contains `waf`, but it does not implicitly enable theHarvester, DNS enumeration, or BlackWidow.
 
+DNS enumeration is bounded even when an upstream tool becomes quiet. Cachaza runs
+`dnsenum` without reverse lookups, with at most two worker threads and a DNS query
+timeout of at most 10 seconds. Current Kali Fierce releases are invoked with
+`--domain`. Each adapter has a five-minute default process limit; change it with
+`-dns-enum-max-runtime SECONDS` (30–3600). A timeout preserves and normalizes all
+partial output, records exit code 124, and continues unless `-strict` is selected.
+
 ## 📊 Reports and workspace
 
 Default runs write JSON and TXT reports. Use `-format all` for every supported format:
