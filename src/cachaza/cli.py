@@ -425,6 +425,13 @@ its findings. Direct probes must be explicitly authorized with -active.""",
         help="DNS enumeration adapters: dnsenum,fierce",
     )
     run.add_argument(
+        "-dns-enum-max-runtime",
+        type=int,
+        default=300,
+        metavar="SECONDS",
+        help="maximum runtime for each dnsenum/Fierce process (30-3600; default: 300)",
+    )
+    run.add_argument(
         "-blw",
         dest="blackwidow_depth",
         type=int,
@@ -652,6 +659,8 @@ def _validate_run_args(args: argparse.Namespace, target: TargetSpec) -> None:
         raise ValidationError("-subdomain-threads must be between 1 and 2")
     if not 1 <= args.harvester_limit <= 5000:
         raise ValidationError("-harvester-limit must be between 1 and 5000")
+    if not 30 <= args.dns_enum_max_runtime <= 3600:
+        raise ValidationError("-dns-enum-max-runtime must be between 30 and 3600")
     if args.blackwidow_depth is not None and not 1 <= args.blackwidow_depth <= 10:
         raise ValidationError("-blw LEVEL must be between 1 and 10")
     _validate_ports(args.ports)
@@ -803,6 +812,7 @@ def command_run(args: argparse.Namespace, console: Console) -> int:
         harvester_limit=args.harvester_limit,
         harvester_dns_server=args.harvester_dns_server,
         dns_enum_tools=dns_enum_tools,
+        dns_enum_max_runtime=args.dns_enum_max_runtime,
         blackwidow_depth=args.blackwidow_depth,
         blackwidow_path=args.blackwidow_path,
         origin=origin_config,

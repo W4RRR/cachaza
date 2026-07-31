@@ -43,6 +43,13 @@ The tuple `(source, kind, value)` is normally deduplicated within a workspace. W
 
 `dnsenum` and Fierce discoveries are candidates, not proof that a hostname is a distinct asset. When either bundle is requested alongside the normal active pipeline, discovery runs before DNS and HTTP validation. Cachaza invokes dnsx with root-specific wildcard filtering (`-wd ROOT_DOMAIN`) and passes only dnsx-confirmed names to later port and HTTP stages.
 
+The external DNS-enumeration processes are also bounded. `dnsenum` skips reverse
+lookups, uses no more than two threads, and caps each DNS query at ten seconds;
+Fierce uses the current `--domain` interface. Each tool receives a configurable
+wall-clock limit (five minutes by default). If that limit expires, Cachaza kills
+the complete POSIX process group, retains partial stdout/stderr, and continues the
+fault-isolated pipeline.
+
 Reports classify subdomains as HTTP-responsive, DNS-only, or unverified. Meaningful HTTP evidence includes 2xx/3xx and authentication or authorization responses such as 401/403; a 404 by itself is not promoted. A status code alone is not sufficient to defeat catch-all hosting because arbitrary names can return the same 200 page or redirect. Wildcard-like and brute-force-only candidates remain in `report.json`, CSV, and `rest/findings.jsonl` for provenance, but they are omitted from executive highlights, the relationship graph, and the PDF appendix.
 
 ## Endpoint and WAF boundary

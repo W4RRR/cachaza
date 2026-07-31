@@ -135,6 +135,7 @@ class RunOptions:
     harvester_limit: int = 500
     harvester_dns_server: str | None = None
     dns_enum_tools: list[str] = field(default_factory=lambda: ["dnsenum", "fierce"])
+    dns_enum_max_runtime: int = 300
     blackwidow_depth: int | None = None
     blackwidow_path: str | None = None
     origin: OriginConfig | None = None
@@ -176,6 +177,11 @@ class Pipeline:
             "dry_run",
         ):
             options.pop(key, None)
+        if name != "dns_enum":
+            # A DNS-enumerator wall-clock limit cannot change evidence produced
+            # by corporate/API/HTTP/etc. Preserve their existing checkpoints
+            # when an operator tunes or upgrades this stage-specific limit.
+            options.pop("dns_enum_max_runtime", None)
         payload = json.dumps(
             {
                 "stage": name,
@@ -1414,9 +1420,18 @@ class Pipeline:
             if not binary:
                 continue
             for root in self.target.domains:
-                argv = [binary, root] if tool == "dnsenum" else [binary, "-dns", root]
+                argv = dns_enum.build_argv(
+                    binary,
+                    tool,
+                    root,
+                    query_timeout=self.options.timeout,
+                )
+                self.console.info(
+                    f"{tool} may be quiet while checking its DNS wordlist; "
+                    f"maximum runtime for {root}: {self.options.dns_enum_max_runtime}s"
+                )
                 result = self.runner.run(
-                    argv, timeout=max(3600, self.options.timeout * 200)
+                    argv, timeout=self.options.dns_enum_max_runtime
                 )
                 if result.skipped:
                     continue
@@ -1425,9 +1440,12 @@ class Pipeline:
                     f"dns-enum/{self._artifact_slug(root)}-{tool}.txt", raw
                 )
                 if result.returncode != 0:
-                    self.console.warn(
-                        f"{tool} exited with {result.returncode} for {root}; partial output will still be parsed"
+                    reason = (
+                        f"reached the {self.options.dns_enum_max_runtime}s runtime limit"
+                        if result.returncode == 124
+                        else f"exited with {result.returncode}"
                     )
+                    self.console.warn(f"{tool} {reason} for {root}; partial output will still be parsed")
                 added += self._ingest_findings(
                     dns_enum.parse_output(raw, tool, root, self.target)
                 )
