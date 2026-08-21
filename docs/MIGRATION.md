@@ -15,6 +15,8 @@ The recommended repository transition preserves the old Origin history without m
 5. Create and push the annotated `v1.0.0` tag from the merged Cachaza commit.
 6. Archive (do not delete) `origin-exposure-auditor` on GitHub and place a migration notice pointing to Cachaza and this document.
 
+Pushing `v1.0.0` starts `.github/workflows/release.yml`, which validates the version, runs the tests, builds the wheel and source archive, and publishes them in a non-draft GitHub Release. Existing v0.10.7 installations can then upgrade normally with `cachaza -up`; verify the result with `cachaza -version`.
+
 If preserving the standalone source inside Cachaza is a hard requirement, import its Git history onto an archival branch with `git subtree` before the release; do not use `git merge --allow-unrelated-histories` on Cachaza's production `main`, because it creates a noisy root merge and file collisions without improving the integrated package.
 
 Use the new readable flag for an Origin-only passive run:

@@ -9,5 +9,6 @@
 - Added ranked Origin visuals to HTML and PDF and Origin probability metadata to the HTML relationship graph.
 - Prevented rejected edge/third-party candidates from being presented as the most likely Origin IP.
 - Preserved bounded Direct-origin validation, explicit authorization gates and the central request budget.
+- Added a tag-driven GitHub Release workflow and pinned non-checkout `cachaza -up` installations to the latest published stable release.
 
 The Origin probability is an explainable correlation score, not a statistically calibrated probability or proof of ownership.

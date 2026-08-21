@@ -61,6 +61,19 @@ def _write_cached(path: Path, version: str, now: float) -> None:
         pass
 
 
+def latest_release_version(*, timeout: float = 5.0) -> str | None:
+    """Return the tag version of GitHub's latest published stable release."""
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": f"cachaza/{__version__}"}
+    try:
+        with GLOBAL_REQUEST_LIMITER.slot():
+            with urlopen(Request(LATEST_RELEASE_API, headers=headers), timeout=timeout) as response:
+                payload: Any = json.loads(response.read().decode("utf-8", "replace"))
+        release_version = str(payload.get("tag_name") or "").lstrip("v") if isinstance(payload, dict) else ""
+        return release_version or None
+    except (OSError, ValueError, TypeError, json.JSONDecodeError, HTTPError, URLError):
+        return None
+
+
 def latest_version(*, timeout: float = 2.5, force: bool = False) -> str | None:
     """Return the newest public version, using a 24-hour cache when possible."""
     now = time.time()
@@ -71,15 +84,9 @@ def latest_version(*, timeout: float = 2.5, force: bool = False) -> str | None:
             return cached
     headers = {"Accept": "application/vnd.github+json", "User-Agent": f"cachaza/{__version__}"}
     versions: list[str] = []
-    try:
-        with GLOBAL_REQUEST_LIMITER.slot():
-            with urlopen(Request(LATEST_RELEASE_API, headers=headers), timeout=timeout) as response:
-                payload: Any = json.loads(response.read().decode("utf-8", "replace"))
-        release_version = str(payload.get("tag_name") or "").lstrip("v") if isinstance(payload, dict) else ""
-        if release_version:
-            versions.append(release_version)
-    except (OSError, ValueError, TypeError, json.JSONDecodeError, HTTPError, URLError):
-        pass
+    release_version = latest_release_version(timeout=timeout)
+    if release_version:
+        versions.append(release_version)
     # Main can contain a newer tagged package version before a GitHub Release is
     # created. Query both sources so existing installations still learn about it.
     try:
@@ -120,6 +127,14 @@ def update_command() -> str:
     )
 
 
+def _remote_install_target() -> tuple[str, str | None]:
+    """Resolve a stable tag for pipx, falling back to main when GitHub is unavailable."""
+    release_version = latest_release_version()
+    if release_version:
+        return f"git+{REPOSITORY}.git@v{release_version}", release_version
+    return f"git+{REPOSITORY}.git@main", None
+
+
 def perform_update(console: Console) -> int:
     """Update from a checkout when available, otherwise reinstall from GitHub."""
     pipx = shutil.which("pipx")
@@ -138,9 +153,12 @@ def perform_update(console: Console) -> int:
             ]
         )
     else:
-        commands.append(
-            ([pipx, "install", "--force", "git+https://github.com/W4RRR/cachaza.git"], None)
-        )
+        target, release_version = _remote_install_target()
+        if release_version:
+            console.info(f"Selected stable GitHub Release v{release_version}.")
+        else:
+            console.warn("The GitHub Release API is unavailable; falling back to the main branch.")
+        commands.append(([pipx, "install", "--force", target], None))
     environment = constrained_environment({"CACHAZA_SKIP_UPDATE_CHECK": "1"})
     for argv, cwd in commands:
         console.info("Running update step: " + " ".join(argv[1:] if len(argv) > 1 else argv))

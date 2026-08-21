@@ -653,7 +653,7 @@ See [docs/OPTIONAL_TOOLS.md](docs/OPTIONAL_TOOLS.md) for installation recipes, p
 The aliases `cachaza -up` and `cachaza -update` run the same conservative update workflow.
 
 - From a Git checkout, Cachaza runs `git pull --ff-only origin main`, then reinstalls the checkout with `pipx install --force .`.
-- Without a checkout, it reinstalls from `git+https://github.com/W4RRR/cachaza.git` through pipx.
+- Without a checkout, it resolves GitHub's latest published stable Release and reinstalls its exact `vX.Y.Z` tag through pipx. If the GitHub Release API is temporarily unavailable, it falls back to `main`.
 - After installation, it prints the version and runs `cachaza doctor` when the executable is visible on `PATH`.
 - The workflow does not run `git reset`, force-push, or a non-fast-forward merge.
 
@@ -663,6 +663,30 @@ cachaza -update
 ```
 
 Both commands are equivalent.
+
+An existing v0.10.7 installation already updates from `main`. Once v1.0.0 has been merged into `main` and the `v1.0.0` Release has been published from that same commit, the normal upgrade is therefore:
+
+```bash
+cachaza -up
+cachaza -version
+```
+
+The second command must print `cachaza 1.0.0`.
+
+### Publishing a GitHub Release
+
+The repository includes `.github/workflows/release.yml`. Pushing an annotated version tag runs the complete test suite, checks that the tag matches `pyproject.toml`, builds the wheel and source archive, extracts that version's notes from `CHANGELOG.md`, and creates the GitHub Release with both artifacts attached.
+
+Create the tag only after the release pull request has been merged into `main`:
+
+```bash
+git switch main
+git pull --ff-only origin main
+git tag -a v1.0.0 -m "Cachaza v1.0.0"
+git push origin v1.0.0
+```
+
+The Release must be public—not a draft or prerelease—so `/releases/latest` and `cachaza -up` can discover it.
 
 Normal CLI invocations check the latest public version at most once every 24 hours and cache the result. When a newer version exists, the warning always shows `cachaza -up`; an interactive terminal can run it directly from the prompt, while non-interactive runs print the guidance and continue. Disable that network check and cache access in controlled or offline environments with:
 

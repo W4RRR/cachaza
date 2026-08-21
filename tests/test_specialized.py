@@ -420,6 +420,49 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(calls[2].args[0], ["/home/kali/.local/bin/cachaza", "-version"])
         self.assertEqual(calls[3].args[0], ["/home/kali/.local/bin/cachaza", "doctor"])
 
+    def test_non_checkout_update_pins_the_latest_published_release(self) -> None:
+        binaries = {
+            "pipx": "/usr/bin/pipx",
+            "cachaza": "/home/kali/.local/bin/cachaza",
+        }
+        with (
+            patch("cachaza.update._project_root", return_value=None),
+            patch("cachaza.update.latest_release_version", return_value="1.0.0"),
+            patch("cachaza.update.shutil.which", side_effect=lambda name: binaries.get(name)),
+            patch("cachaza.update.subprocess.run", return_value=Mock(returncode=0)) as run,
+        ):
+            self.assertEqual(perform_update(Console(silent=True)), 0)
+
+        self.assertEqual(
+            run.call_args_list[0].args[0],
+            [
+                "/usr/bin/pipx",
+                "install",
+                "--force",
+                "git+https://github.com/W4RRR/cachaza.git@v1.0.0",
+            ],
+        )
+
+    def test_non_checkout_update_falls_back_to_main_when_release_api_is_offline(self) -> None:
+        binaries = {"pipx": "/usr/bin/pipx"}
+        with (
+            patch("cachaza.update._project_root", return_value=None),
+            patch("cachaza.update.latest_release_version", return_value=None),
+            patch("cachaza.update.shutil.which", side_effect=lambda name: binaries.get(name)),
+            patch("cachaza.update.subprocess.run", return_value=Mock(returncode=0)) as run,
+        ):
+            self.assertEqual(perform_update(Console(silent=True)), 0)
+
+        self.assertEqual(
+            run.call_args_list[0].args[0],
+            [
+                "/usr/bin/pipx",
+                "install",
+                "--force",
+                "git+https://github.com/W4RRR/cachaza.git@main",
+            ],
+        )
+
     def test_outdated_version_warns_with_short_update_command(self) -> None:
         output = io.StringIO()
         with (
