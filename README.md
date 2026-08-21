@@ -358,6 +358,16 @@ cachaza run -d example.com -origin-auto -origin-mode balanced -active -authorize
 cachaza run -d example.com -origin-auto -origin-mode deep -origin-max-auto-candidates 20 -origin-max-requests 100 -origin-rate-limit 1 -origin-concurrency 2 -active -authorized -o example-origin-deep
 ```
 
+### Maximum authorized profile with Origin ranking
+
+The following one-liner combines the `full` profile and specialist bundles with deep,
+bounded Origin discovery. Use it only for a domain you own or are explicitly authorized
+to assess. Shodan search and commercial passive providers may consume account credits.
+
+```bash
+cachaza run -d example.com -profile full -active -authorized -s -harvester -dns-enum -dns-enum-max-runtime 300 -w -blw 4 -whois -wappalyzer -shodan-mode search -shodan-pages 5 -shodan-max-queries 200 -origin-ip -origin-mode deep -origin-query-engines virustotal,securitytrails,censys,shodan,urlscan,uncover,otx,viewdns,fofa -origin-max-auto-candidates 20 -origin-max-requests 100 -origin-max-requests-per-ip 10 -origin-rate-limit 1 -origin-concurrency 2 -origin-max-history-results 500 -origin-use-observed-paths -origin-continue-after-match -api-config "$HOME/.config/cachaza/providers.env" -o "cachaza-hunter_v5.0-example.com" -format all -v
+```
+
 ### What Direct-origin validation checks
 
 - TCP connectivity on the configured web ports.
