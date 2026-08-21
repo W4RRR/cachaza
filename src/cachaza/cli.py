@@ -69,7 +69,7 @@ PROFILE_HELP = """Profiles:
 USEFUL_OPTIONS_HELP = """Useful options:
   -active        authorizes direct probes required by active stages and safe/full profiles
   -authorized    confirms permission for automatic Direct-origin validation
-  -origin-auto   discovers, scores, selects, and verifies correlated origin candidates automatically
+  -origin-ip     discovers, scores, selects, and reports the most likely real origin IP
   -whois         enriches every unique public IP with registration information
   -wappalyzer    detects HTTP technologies; requires -active
   -s             runs passive Subfinder and Assetfinder subdomain discovery
@@ -315,7 +315,7 @@ its findings. Direct probes must be explicitly authorized with -active.""",
         help="confirm permission to assess the domain and automatically correlated origin infrastructure",
     )
     origin = run.add_argument_group("Automatic Origin discovery and verification")
-    origin.add_argument("-origin-auto", action="store_true", help="run automatic Origin candidate discovery; no IP input or per-IP approval is required")
+    origin.add_argument("-origin-auto", "-origin-ip", "-real-origin-ip", dest="origin_auto", action="store_true", help="discover and rank the most likely real Origin IP; aliases: -origin-ip, -real-origin-ip")
     origin.add_argument("-origin-mode", choices=("passive", "balanced", "deep"), default="balanced", help="Origin discovery intensity (default: balanced)")
     origin.add_argument("-origin-auto-verify", action="store_true", default=True, help="automatically perform bounded Direct-origin validation when the mode permits it")
     origin.add_argument("-origin-min-auto-score", type=int, default=50, metavar="N")
@@ -343,7 +343,7 @@ its findings. Direct probes must be explicitly authorized with -active.""",
     origin.add_argument("-origin-max-permutations", type=int, default=None, metavar="N")
     origin.add_argument("-origin-historical-dns", action="store_true", default=True)
     origin.add_argument("-origin-max-history-results", type=int, default=100, metavar="N")
-    origin.add_argument("-origin-query-engines", default="virustotal,securitytrails,censys,shodan,urlscan,uncover", metavar="LIST")
+    origin.add_argument("-origin-query-engines", default="virustotal,securitytrails,censys,shodan,urlscan,uncover,viewdns,fofa", metavar="LIST", help="passive providers: virustotal,securitytrails,censys,shodan,urlscan,uncover,otx,viewdns,fofa")
     origin.add_argument("-origin-exclude-provider", action="append", default=[], metavar="LIST")
     origin.add_argument("-origin-exclude-cidr", dest="origin_exclude_cidr_file", metavar="FILE")
     origin.add_argument("-origin-include-cidr", dest="origin_include_cidr_file", metavar="FILE")
@@ -570,6 +570,10 @@ def _origin_config_from_args(args: argparse.Namespace) -> OriginConfig:
 
 
 def _validate_origin_config(config: OriginConfig) -> None:
+    supported_query_engines = {
+        "virustotal", "securitytrails", "censys", "shodan", "urlscan",
+        "uncover", "otx", "viewdns", "fofa",
+    }
     checks = (
         (0 <= config.minimum_score <= 100, "-origin-min-auto-score must be between 0 and 100"),
         (1 <= config.maximum_candidates <= 100, "-origin-max-auto-candidates must be between 1 and 100"),
@@ -590,6 +594,14 @@ def _validate_origin_config(config: OriginConfig) -> None:
     for valid, message in checks:
         if not valid:
             raise ValidationError(message)
+    unknown_engines = {
+        engine.casefold() for engine in config.query_engines
+    } - supported_query_engines
+    if unknown_engines:
+        raise ValidationError(
+            "-origin-query-engines contains unsupported providers: "
+            + ", ".join(sorted(unknown_engines))
+        )
     for path in config.paths:
         if not path.startswith("/") or "?" in path or "#" in path:
             raise ValidationError("-origin-path must be an absolute public path without query or fragment")

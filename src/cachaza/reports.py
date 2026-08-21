@@ -508,6 +508,22 @@ def _build_graph(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
             evidence=True,
         )
         metadata = finding.get("metadata") if isinstance(finding.get("metadata"), dict) else {}
+        if kind == "origin_candidate" and finding_id:
+            probability = int(
+                metadata.get("origin_probability_percent", metadata.get("score", 0)) or 0
+            )
+            nodes[finding_id].update(
+                {
+                    "origin_probability_percent": max(0, min(100, probability)),
+                    "confidence_band": str(metadata.get("confidence_band") or "inconclusive"),
+                    "classification": str(metadata.get("classification") or "inconclusive"),
+                    "probability_method": str(
+                        metadata.get("probability_method")
+                        or "heuristic_correlation_score_v1"
+                    ),
+                    "validation": f"{max(0, min(100, probability))}% origin likelihood",
+                }
+            )
 
         root_value = metadata.get("root") or metadata.get("tenant_seed")
         if root_value:
@@ -731,6 +747,11 @@ def build_report_data(
             loaded_origin = json.loads(origin_path.read_text(encoding="utf-8", errors="replace"))
             if isinstance(loaded_origin, dict):
                 origin_discovery = loaded_origin
+                origin_providers = loaded_origin.get("provider_status", {})
+                if isinstance(origin_providers, dict):
+                    for name, status in origin_providers.items():
+                        if isinstance(status, dict):
+                            provider_status.setdefault(f"origin:{name}", status)
         except (OSError, json.JSONDecodeError):
             pass
     provider_issues = [
@@ -770,6 +791,18 @@ def build_report_data(
         "source_status": source_status,
         "provider_status": provider_status,
         "origin_discovery": origin_discovery,
+        "origin": {
+            "ip": origin_discovery.get("origin_ip"),
+            "probability": origin_discovery.get("origin_probability", 0.0),
+            "probability_percent": origin_discovery.get(
+                "origin_probability_percent", origin_discovery.get("confidence_score", 0)
+            ),
+            "confidence_band": origin_discovery.get("confidence_band", "inconclusive"),
+            "classification": origin_discovery.get("classification", "inconclusive"),
+            "candidates": origin_discovery.get("candidate_probabilities", []),
+            "probability_method": "heuristic_correlation_score_v1",
+            "notice": origin_discovery.get("probability_notice", ""),
+        },
         "findings": [finding.to_dict() for finding in workspace.findings],
     }
     data["subdomain_summary"] = build_subdomain_summary(data["findings"])
@@ -885,14 +918,29 @@ def _render_txt(data: dict[str, Any], *, color: bool = True) -> str:
                 f"Rejected before validation     : {origin.get('candidates_rejected_before_validation', 0)}",
                 f"Actively validated             : {origin.get('candidates_actively_validated', 0)}",
                 f"Direct requests performed      : {origin.get('direct_requests_performed', 0)}",
-                f"Highest-confidence candidate   : {origin.get('highest_confidence_candidate') or 'none'}",
-                f"Confidence score               : {origin.get('confidence_score', 0)}/100",
+                f"Origin IP                      : {origin.get('origin_ip') or origin.get('highest_confidence_candidate') or 'none'}",
+                f"Origin probability             : {origin.get('origin_probability_percent', origin.get('confidence_score', 0))}%",
+                f"Confidence band                : {origin.get('confidence_band', 'inconclusive')}",
                 f"Classification                 : {origin.get('classification', 'inconclusive')}",
                 "Manual confirmation recommended: yes",
             ]
         )
+        ranked = origin.get("candidate_probabilities", [])
+        if isinstance(ranked, list) and ranked:
+            lines.append("Ranked candidate probabilities:")
+            for item in ranked[:20]:
+                if not isinstance(item, dict):
+                    continue
+                lines.append(
+                    f"  #{item.get('rank', '-')} {item.get('ip', '-')} "
+                    f"{item.get('origin_probability_percent', 0)}% "
+                    f"[{item.get('confidence_band', 'inconclusive')}] "
+                    f"{item.get('classification', 'inconclusive')}"
+                )
         if origin.get("message"):
             lines.append(str(origin["message"]))
+        if origin.get("probability_notice"):
+            lines.append(str(origin["probability_notice"]))
         lines.append(str(origin.get("warning") or ""))
 
     section("EXTERNAL SOURCE STATUS")
@@ -1187,6 +1235,7 @@ def _pdf_text(value: Any) -> str:
 
 def _write_pdf(path: Path, data: dict[str, Any]) -> None:
     try:
+        from reportlab.graphics.shapes import Drawing, Rect, String
         from reportlab.lib import colors
         from reportlab.lib.enums import TA_CENTER, TA_RIGHT
         from reportlab.lib.pagesizes import A4
@@ -1194,6 +1243,7 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
         from reportlab.lib.units import mm
         from reportlab.platypus import (
             LongTable,
+            KeepTogether,
             PageBreak,
             Paragraph,
             SimpleDocTemplate,
@@ -1254,6 +1304,30 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
 
     def p(value: Any, style: str = "Cell") -> Any:
         return Paragraph(_pdf_text(value), styles[style])
+
+    def origin_probability_chart(rows: list[dict[str, Any]]) -> Any:
+        visible = [item for item in rows if isinstance(item, dict)][:10]
+        chart_width = 165 * mm
+        label_width = 62 * mm
+        bar_width = chart_width - label_width - 17 * mm
+        row_height = 9 * mm
+        chart_height = max(14 * mm, len(visible) * row_height + 5 * mm)
+        drawing = Drawing(chart_width, chart_height)
+        for index, item in enumerate(visible):
+            probability = max(
+                0, min(100, int(item.get("origin_probability_percent", 0) or 0))
+            )
+            y = chart_height - (index + 1) * row_height + 2 * mm
+            address = str(item.get("ip") or "-")
+            if len(address) > 31:
+                address = address[:28] + "..."
+            drawing.add(String(0, y + 1.2 * mm, address, fontName="Helvetica", fontSize=7, fillColor=palette["navy"]))
+            drawing.add(Rect(label_width, y, bar_width, 4.2 * mm, rx=2 * mm, ry=2 * mm, fillColor=palette["soft"], strokeColor=None))
+            if probability:
+                color = palette["green"] if item.get("eligible_origin") else palette["amber"]
+                drawing.add(Rect(label_width, y, bar_width * probability / 100, 4.2 * mm, rx=2 * mm, ry=2 * mm, fillColor=color, strokeColor=None))
+            drawing.add(String(label_width + bar_width + 3 * mm, y + 1.2 * mm, f"{probability}%", fontName="Helvetica-Bold", fontSize=7, fillColor=palette["navy"]))
+        return drawing
 
     table_style = TableStyle(
         [
@@ -1360,16 +1434,52 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
             ("Candidates", origin.get("candidates_collected", 0)),
             ("Actively validated", origin.get("candidates_actively_validated", 0)),
             ("Direct requests", origin.get("direct_requests_performed", 0)),
-            ("Highest-confidence candidate", origin.get("highest_confidence_candidate") or "none"),
-            ("Confidence", f"{origin.get('confidence_score', 0)}/100"),
+            ("Origin IP", origin.get("origin_ip") or origin.get("highest_confidence_candidate") or "none"),
+            ("Origin probability", f"{origin.get('origin_probability_percent', origin.get('confidence_score', 0))}%"),
+            ("Confidence band", origin.get("confidence_band", "inconclusive")),
             ("Classification", origin.get("classification", "inconclusive")),
         ):
             origin_rows.append([p(label), p(value)])
         origin_story = [
             Paragraph("Automatic Origin discovery", styles["Section"]),
             Table(origin_rows, colWidths=[70 * mm, 95 * mm], repeatRows=1, style=table_style),
-            Paragraph(_pdf_text(origin.get("warning", "")), styles["Warning"]),
         ]
+        ranked_origin = origin.get("candidate_probabilities", [])
+        if isinstance(ranked_origin, list) and ranked_origin:
+            ranking_rows = [[p(value, "CellHead") for value in ("IP", "Probability", "Band", "Classification", "Sources")]]
+            for item in ranked_origin[:20]:
+                if not isinstance(item, dict):
+                    continue
+                ranking_rows.append(
+                    [
+                        p(item.get("ip", "-")),
+                        p(f"{item.get('origin_probability_percent', 0)}%"),
+                        p(item.get("confidence_band", "inconclusive")),
+                        p(item.get("classification", "inconclusive")),
+                        p(", ".join(item.get("sources", [])) or "-"),
+                    ]
+                )
+            origin_story.extend(
+                [
+                    KeepTogether(
+                        [
+                            Paragraph("Origin probability ranking", styles["Section"]),
+                            origin_probability_chart(ranked_origin),
+                            Spacer(1, 2 * mm),
+                        ]
+                    ),
+                    LongTable(
+                        ranking_rows,
+                        colWidths=[39 * mm, 22 * mm, 22 * mm, 39 * mm, 43 * mm],
+                        repeatRows=1,
+                        style=table_style,
+                    ),
+                ]
+            )
+        origin_story.extend([
+            Paragraph(_pdf_text(origin.get("probability_notice", "")), styles["BodySmall"]),
+            Paragraph(_pdf_text(origin.get("warning", "")), styles["Warning"]),
+        ])
 
     story: list[Any] = [
         cover,

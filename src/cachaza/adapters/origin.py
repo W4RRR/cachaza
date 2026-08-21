@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import ipaddress
 import json
 import socket
@@ -13,6 +14,7 @@ from ..external import CommandRunner, find_tool
 from ..http import HttpError, request_json
 from ..models import Finding
 from ..safety import domain_in_scope
+from ..sources import censys_search
 
 
 SOURCE_FAMILIES = {
@@ -27,6 +29,10 @@ SOURCE_FAMILIES = {
     "shodan": "shodan",
     "uncover": "infrastructure_search",
     "virustotal": "virustotal",
+    "securitytrails": "securitytrails",
+    "otx": "otx",
+    "viewdns": "viewdns",
+    "fofa": "fofa",
     "dns": "current_dns",
     "dnsx": "current_dns",
     "scope": "operator_scope",
@@ -287,6 +293,333 @@ def securitytrails_resolutions(
     return observations, payloads
 
 
+def urlscan_observations(
+    domain: str,
+    *,
+    api_key: str,
+    maximum: int,
+    timeout: int,
+    retries: int,
+) -> tuple[list[CandidateObservation], dict[str, Any]]:
+    """Collect existing urlscan results without submitting a new scan."""
+    query = (
+        f"(page.domain:{domain} OR page.domain:*.{domain} "
+        f"OR task.domain:{domain} OR task.domain:*.{domain})"
+    )
+    headers = {"API-Key": api_key} if api_key else {}
+    payload = request_json(
+        "https://urlscan.io/api/v1/search/",
+        timeout=timeout,
+        retries=retries,
+        params={"q": query, "size": min(maximum, 10_000)},
+        headers=headers,
+    )
+    observations: list[CandidateObservation] = []
+    rows = payload.get("results", []) if isinstance(payload, dict) else []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        page = row.get("page", {})
+        task = row.get("task", {})
+        if not isinstance(page, dict) or not isinstance(task, dict):
+            continue
+        try:
+            ip = str(ipaddress.ip_address(str(page.get("ip") or "")))
+        except ValueError:
+            continue
+        hostname = str(page.get("domain") or domain).casefold().rstrip(".")
+        if not domain_in_scope(hostname, [domain]):
+            hostname = domain
+        asn = str(page.get("asn") or "")
+        if asn and not asn.upper().startswith("AS"):
+            asn = "AS" + asn
+        observations.append(
+            CandidateObservation(
+                ip=ip,
+                hostname=hostname,
+                source="urlscan",
+                source_family="urlscan",
+                relationship="urlscan_main_document",
+                historical=True,
+                last_seen=str(task.get("time") or "") or None,
+                metadata={
+                    "historical": True,
+                    "asns": [asn] if asn else [],
+                    "organizations": [str(page.get("asnname"))] if page.get("asnname") else [],
+                    "url": str(task.get("url") or page.get("url") or ""),
+                },
+            )
+        )
+        if len(observations) >= maximum:
+            break
+    return observations, payload if isinstance(payload, dict) else {}
+
+
+def censys_observations(
+    domain: str,
+    *,
+    api_key: str,
+    organization_id: str,
+    maximum: int,
+    timeout: int,
+    retries: int,
+) -> tuple[list[CandidateObservation], dict[str, Any]]:
+    """Collect Censys Platform certificate/name correlations."""
+    result = censys_search(
+        domain,
+        api_key=api_key,
+        organization_id=organization_id,
+        timeout=timeout,
+        retries=retries,
+        page_size=min(maximum, 100),
+    )
+    observations = [
+        CandidateObservation(
+            ip=ip,
+            hostname=domain,
+            source="censys-platform",
+            source_family="censys",
+            relationship="provider_search",
+            metadata={"certificate_search": True},
+        )
+        for ip in result.get("ips", [])[:maximum]
+    ]
+    return observations, result.get("payload", {})
+
+
+def shodan_observations(
+    domain: str,
+    *,
+    api_key: str,
+    maximum: int,
+    timeout: int,
+    retries: int,
+) -> tuple[list[CandidateObservation], dict[str, Any]]:
+    """Search indexed Shodan banners; this never requests an active Shodan scan."""
+    query = f'ssl:"{domain}"'
+    payload = request_json(
+        "https://api.shodan.io/shodan/host/search",
+        timeout=timeout,
+        retries=retries,
+        params={"key": api_key, "query": query, "page": 1, "minify": "false"},
+    )
+    observations: list[CandidateObservation] = []
+    rows = payload.get("matches", []) if isinstance(payload, dict) else []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            ip = str(ipaddress.ip_address(str(row.get("ip_str") or "")))
+        except ValueError:
+            continue
+        hostnames = row.get("hostnames") or row.get("domains") or []
+        hostname = str(hostnames[0]) if isinstance(hostnames, list) and hostnames else domain
+        metadata: dict[str, Any] = {"certificate_search": True}
+        if row.get("asn"):
+            metadata["asns"] = [str(row["asn"])]
+        if row.get("org"):
+            metadata["organizations"] = [str(row["org"])]
+        if isinstance(row.get("port"), int):
+            metadata["ports"] = [row["port"]]
+        observations.append(
+            CandidateObservation(
+                ip=ip,
+                hostname=hostname,
+                source="shodan",
+                source_family="shodan",
+                relationship="provider_search",
+                last_seen=str(row.get("timestamp") or "") or None,
+                metadata=metadata,
+            )
+        )
+        if len(observations) >= maximum:
+            break
+    return observations, payload if isinstance(payload, dict) else {}
+
+
+def otx_observations(
+    domain: str,
+    *,
+    api_key: str,
+    maximum: int,
+    timeout: int,
+    retries: int,
+) -> tuple[list[CandidateObservation], dict[str, Any]]:
+    """Collect AlienVault OTX passive DNS and archived URL observations."""
+    base = f"https://otx.alienvault.com/api/v1/indicator/hostname/{domain}"
+    headers = {"X-OTX-API-KEY": api_key} if api_key else {}
+    payloads: dict[str, Any] = {}
+    errors: list[str] = []
+    observations: list[CandidateObservation] = []
+    try:
+        passive = request_json(
+            f"{base}/passive_dns", timeout=timeout, retries=retries, headers=headers
+        )
+        payloads["passive_dns"] = passive
+        rows = passive.get("passive_dns", []) if isinstance(passive, dict) else []
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            try:
+                ip = str(ipaddress.ip_address(str(row.get("address") or "")))
+            except ValueError:
+                continue
+            observations.append(
+                CandidateObservation(
+                    ip=ip,
+                    hostname=str(row.get("hostname") or domain),
+                    source="otx",
+                    source_family="otx",
+                    relationship="historical_dns",
+                    historical=True,
+                    first_seen=str(row.get("first") or "") or None,
+                    last_seen=str(row.get("last") or "") or None,
+                    metadata={"historical": True, "asns": [str(row["asn"])] if row.get("asn") else []},
+                )
+            )
+    except HttpError as exc:
+        errors.append(f"passive_dns: {exc}")
+    try:
+        archived = request_json(
+            f"{base}/url_list",
+            timeout=timeout,
+            retries=retries,
+            params={"limit": min(maximum, 100), "page": 1},
+            headers=headers,
+        )
+        payloads["url_list"] = archived
+        rows = archived.get("url_list", []) if isinstance(archived, dict) else []
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            result = row.get("result", {})
+            worker = result.get("urlworker", {}) if isinstance(result, dict) else {}
+            try:
+                ip = str(ipaddress.ip_address(str(worker.get("ip") or "")))
+            except (AttributeError, ValueError):
+                continue
+            observations.append(
+                CandidateObservation(
+                    ip=ip,
+                    hostname=str(row.get("hostname") or domain),
+                    source="otx",
+                    source_family="otx",
+                    relationship="urlscan_main_document",
+                    historical=True,
+                    last_seen=str(row.get("date") or "") or None,
+                    metadata={"historical": True, "url": str(row.get("url") or "")},
+                )
+            )
+    except HttpError as exc:
+        errors.append(f"url_list: {exc}")
+    payloads["errors"] = errors
+    return observations[:maximum], payloads
+
+
+def viewdns_resolutions(
+    domain: str,
+    *,
+    api_key: str,
+    maximum: int,
+    timeout: int,
+    retries: int,
+) -> tuple[list[CandidateObservation], dict[str, Any]]:
+    payload = request_json(
+        "https://api.viewdns.info/iphistory/",
+        timeout=timeout,
+        retries=retries,
+        params={"domain": domain, "apikey": api_key, "output": "json"},
+    )
+    response = payload.get("response", {}) if isinstance(payload, dict) else {}
+    rows = response.get("records", []) if isinstance(response, dict) else []
+    observations: list[CandidateObservation] = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            ip = str(ipaddress.ip_address(str(row.get("ip") or "")))
+        except ValueError:
+            continue
+        observations.append(
+            CandidateObservation(
+                ip=ip,
+                hostname=domain,
+                source="viewdns",
+                source_family="viewdns",
+                relationship="historical_dns",
+                historical=True,
+                last_seen=str(row.get("lastseen") or "") or None,
+                metadata={
+                    "historical": True,
+                    "organizations": [str(row["owner"])] if row.get("owner") else [],
+                    "country": str(row.get("location") or ""),
+                },
+            )
+        )
+        if len(observations) >= maximum:
+            break
+    return observations, payload if isinstance(payload, dict) else {}
+
+
+def fofa_observations(
+    domain: str,
+    *,
+    email: str,
+    api_key: str,
+    maximum: int,
+    timeout: int,
+    retries: int,
+) -> tuple[list[CandidateObservation], dict[str, Any]]:
+    query = f'domain="{domain}"'
+    fields = "ip,port,host,domain,title,cert,asn,org,lastupdatetime"
+    payload = request_json(
+        "https://fofa.info/api/v1/search/all",
+        timeout=timeout,
+        retries=retries,
+        params={
+            "email": email,
+            "key": api_key,
+            "qbase64": base64.b64encode(query.encode()).decode(),
+            "fields": fields,
+            "size": min(maximum, 100),
+        },
+    )
+    if isinstance(payload, dict) and payload.get("error"):
+        raise HttpError(str(payload.get("errmsg") or "FOFA returned an error"))
+    observations: list[CandidateObservation] = []
+    rows = payload.get("results", []) if isinstance(payload, dict) else []
+    field_names = fields.split(",")
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, list):
+            continue
+        values = dict(zip(field_names, row))
+        try:
+            ip = str(ipaddress.ip_address(str(values.get("ip") or "")))
+        except ValueError:
+            continue
+        metadata: dict[str, Any] = {"certificate_search": bool(values.get("cert"))}
+        if values.get("asn"):
+            metadata["asns"] = [str(values["asn"])]
+        if values.get("org"):
+            metadata["organizations"] = [str(values["org"])]
+        if str(values.get("port") or "").isdigit():
+            metadata["ports"] = [int(values["port"])]
+        observations.append(
+            CandidateObservation(
+                ip=ip,
+                hostname=str(values.get("domain") or domain),
+                source="fofa",
+                source_family="fofa",
+                relationship="provider_search",
+                last_seen=str(values.get("lastupdatetime") or "") or None,
+                metadata=metadata,
+            )
+        )
+        if len(observations) >= maximum:
+            break
+    return observations, payload if isinstance(payload, dict) else {}
+
+
 def run_dns_permutations(
     names: Iterable[str],
     roots: list[str],
@@ -400,9 +733,15 @@ __all__ = [
     "HttpError",
     "collect_resolved_names",
     "collect_workspace_observations",
+    "censys_observations",
+    "fofa_observations",
+    "otx_observations",
     "resolve_host",
     "run_dns_permutations",
     "securitytrails_resolutions",
+    "shodan_observations",
     "source_family",
+    "urlscan_observations",
+    "viewdns_resolutions",
     "virustotal_resolutions",
 ]

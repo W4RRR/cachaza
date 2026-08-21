@@ -23,7 +23,7 @@ _________     _____  _________   ___ ___    _____  __________  _____
  \______  /\____|__  /\______  /\___|_  /\____|__  /_______ \____|__  /
         \/         \/        \/       \/         \/        \/       \/
                    github.com/W4RRR/cachaza by W4RRR
-                                v0.10.7
+                                 v1.0.0
 ```
 
 Cachaza turns an explicitly defined domain or network scope into a reproducible reconnaissance workspace. It collects passive intelligence first, applies scope decisions to every observation, and requires explicit authorization before direct-contact stages run.
@@ -330,6 +330,8 @@ WAF findings retain the target origin, vendor, source, confidence, and bounded e
 
 Origin discovery is separate from the general active pipeline. It collects candidate IPs from existing evidence and configured sources, rejects unsuitable infrastructure, applies deterministic scores, and optionally performs low-impact Direct-origin validation.
 
+Version 1.0 folds the standalone `origin-exposure-auditor` workflow into Cachaza. Current DNS, CT-derived names, VirusTotal, SecurityTrails, Censys, Shodan, urlscan, OTX, ViewDNS and FOFA observations can now feed the same candidate model (subject to `-origin-query-engines`, credentials, provider access and quotas). Existing pipeline evidence is reused and upstream wrappers are collapsed into source families so the same provider is not counted twice.
+
 | Mode | Direct validation | Default boundary | Required gate |
 |---|---:|---|---|
 | `passive` | No | Collect and rank candidates only | None |
@@ -341,7 +343,7 @@ Disable direct validation in any mode with `-origin-no-direct-validation`.
 ### Passive candidate discovery
 
 ```bash
-cachaza run -d example.com -origin-auto -origin-mode passive -o example-origin-passive
+cachaza run -d example.com -origin-ip -origin-mode passive -o example-origin-passive
 ```
 
 ### Authorized balanced validation
@@ -376,7 +378,9 @@ cachaza run -d example.com -origin-auto -origin-mode deep -origin-max-auto-candi
 > [!NOTE]
 > A high-confidence Origin result is a technical correlation. It is not proof of ownership, scope, or permission for additional testing.
 
-Origin artifacts are stored under `rest/origin/`, including the public baseline, all/selected/rejected candidates, validation evidence, network classification, request budget, and final JSON/CSV ranking. Response bodies are stored only when `-origin-save-bodies` is explicit.
+`-origin-ip` and `-real-origin-ip` are readable aliases of `-origin-auto`; all three enable the same bounded workflow. The terminal summary and every structured report expose `origin_ip`, `origin_probability`, `origin_probability_percent`, `confidence_band`, classification, and a ranked list of all candidate probabilities. The percentage is the explainable 0-100 correlation score, not a statistically calibrated probability.
+
+Origin artifacts are stored under `rest/origin/`, including the public baseline, all/selected/rejected candidates, validation evidence, provider status, network classification, request budget, and final JSON/CSV ranking. Response bodies are stored only when `-origin-save-bodies` is explicit.
 
 Cloudflare deployments require careful interpretation: proxied DNS returns edge addresses; an origin ACL may allow only Cloudflare ranges; Authenticated Origin Pulls may require a client certificate; and Cloudflare Tunnel may expose no public origin at all. See Cloudflare's documentation for [proxy status](https://developers.cloudflare.com/dns/proxy-status/), [exposed IP addresses](https://developers.cloudflare.com/dns/manage-dns-records/troubleshooting/exposed-ip-address/), [IP ranges and origin ACLs](https://developers.cloudflare.com/fundamentals/concepts/cloudflare-ip-addresses/), [Authenticated Origin Pulls](https://developers.cloudflare.com/ssl/origin-configuration/authenticated-origin-pull/explanation/), and [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/).
 
@@ -440,6 +444,9 @@ Common variables include:
 | `URLSCAN_API_KEY` | urlscan search |
 | `VT_API_KEY` | Optional VirusTotal historical DNS for Origin discovery |
 | `SECURITYTRAILS_API_KEY` | Optional SecurityTrails/Origin evidence |
+| `OTX_API_KEY` | Optional authenticated AlienVault OTX access; OTX can also be selected without a key |
+| `VIEWDNS_API_KEY` | Optional ViewDNS IP-history evidence |
+| `FOFA_EMAIL` / `FOFA_API_KEY` | Optional FOFA indexed-asset evidence |
 
 The full supported set is documented in `config/providers.example.env`. `CENSYS_API_KEY` is a
 current Platform Personal Access Token sent as a Bearer token; theHarvester's legacy connector
@@ -517,11 +524,11 @@ Default runs write JSON and TXT reports. Use `-format all` for every supported f
 
 | Format | Content |
 |---|---|
-| HTML | Self-contained searchable evidence, filters, expandable metadata, and relationship graph |
-| JSON | Lossless scope, findings, graph, network intelligence, stages, and executive categories |
-| TXT | Terminal-friendly summary, inventory, stages, and evidence |
+| HTML | Self-contained searchable evidence, Origin probability ranking, filters, expandable metadata, and relationship graph |
+| JSON | Lossless scope, Origin IP/probabilities, findings, graph, network intelligence, stages, and executive categories |
+| TXT | Terminal-friendly Origin IP/ranking, summary, inventory, stages, and evidence |
 | CSV | One normalized row per finding with spreadsheet formula-prefix neutralization |
-| PDF | Shareable summary, scope, infrastructure tables, stages, inventory, and bounded evidence appendix |
+| PDF | Shareable summary with Origin probability chart/ranking, scope, infrastructure tables, stages, inventory, and bounded evidence appendix |
 
 The terminal and TXT `KEY FINDINGS` summary keeps high-signal evidence readable:
 WAF products are grouped with one origin per line, actionable subdomains are split
@@ -531,7 +538,7 @@ candidates when manual validation is required.
 
 ### HTML relationship explorer
 
-The self-contained HTML report is one of Cachaza's primary analysis surfaces. Its interactive graph connects domains, URLs, IP addresses, networks, technologies, WAF observations, registrations, and evidence sources while preserving the scope and provenance of each node.
+The self-contained HTML report is one of Cachaza's primary analysis surfaces. Its interactive graph connects domains, ranked Origin candidates, URLs, IP addresses, networks, technologies, WAF observations, registrations, and evidence sources while preserving the scope and provenance of each node. Selecting an Origin node shows its probability, confidence band, classification and scoring method.
 
 ![Cachaza HTML report relationship explorer](docs/assets/cachaza-html-report.png)
 
@@ -646,7 +653,7 @@ See [docs/OPTIONAL_TOOLS.md](docs/OPTIONAL_TOOLS.md) for installation recipes, p
 The aliases `cachaza -up` and `cachaza -update` run the same conservative update workflow.
 
 - From a Git checkout, Cachaza runs `git pull --ff-only origin main`, then reinstalls the checkout with `pipx install --force .`.
-- Without a checkout, it reinstalls from `git+https://github.com/W4RRR/cachaza.git` through pipx.
+- Without a checkout, it resolves GitHub's latest published stable Release and reinstalls its exact `vX.Y.Z` tag through pipx. If the GitHub Release API is temporarily unavailable, it falls back to `main`.
 - After installation, it prints the version and runs `cachaza doctor` when the executable is visible on `PATH`.
 - The workflow does not run `git reset`, force-push, or a non-fast-forward merge.
 
@@ -656,6 +663,30 @@ cachaza -update
 ```
 
 Both commands are equivalent.
+
+An existing v0.10.7 installation already updates from `main`. Once v1.0.0 has been merged into `main` and the `v1.0.0` Release has been published from that same commit, the normal upgrade is therefore:
+
+```bash
+cachaza -up
+cachaza -version
+```
+
+The second command must print `cachaza 1.0.0`.
+
+### Publishing a GitHub Release
+
+The repository includes `.github/workflows/release.yml`. Pushing an annotated version tag runs the complete test suite, checks that the tag matches `pyproject.toml`, builds the wheel and source archive, extracts that version's notes from `CHANGELOG.md`, and creates the GitHub Release with both artifacts attached.
+
+Create the tag only after the release pull request has been merged into `main`:
+
+```bash
+git switch main
+git pull --ff-only origin main
+git tag -a v1.0.0 -m "Cachaza v1.0.0"
+git push origin v1.0.0
+```
+
+The Release must be public—not a draft or prerelease—so `/releases/latest` and `cachaza -up` can discover it.
 
 Normal CLI invocations check the latest public version at most once every 24 hours and cache the result. When a newer version exists, the warning always shows `cachaza -up`; an interactive terminal can run it directly from the prompt, while non-interactive runs print the guidance and continue. Disable that network check and cache access in controlled or offline environments with:
 
