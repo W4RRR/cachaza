@@ -2,6 +2,36 @@
 
 Cachaza 0.7 consolidates passive OSINT and authorized active reconnaissance into the Python package and its normalized workspace. The Bash runner is no longer required.
 
+## 1.0 merge of `origin-exposure-auditor`
+
+Cachaza 1.0 is the successor for both repositories. The standalone `origin-audit` package is no longer required for new installations: its provider correlation, scoring concepts, bounded validation and reporting have been integrated into the `origin` stage, Cachaza's evidence stream, and every report format.
+
+The recommended repository transition preserves the old Origin history without mixing two unrelated roots into `main`:
+
+1. Commit or stash every local change in both checkouts.
+2. Create a `release/v1.0.0` branch in the Cachaza repository and commit the integrated source there.
+3. Tag the last standalone Origin commit (for example, `origin-standalone-final`) in its own repository.
+4. Push Cachaza's release branch, open a pull request into `main`, let CI pass, and merge it normally.
+5. Create and push the annotated `v1.0.0` tag from the merged Cachaza commit.
+6. Archive (do not delete) `origin-exposure-auditor` on GitHub and place a migration notice pointing to Cachaza and this document.
+
+If preserving the standalone source inside Cachaza is a hard requirement, import its Git history onto an archival branch with `git subtree` before the release; do not use `git merge --allow-unrelated-histories` on Cachaza's production `main`, because it creates a noisy root merge and file collisions without improving the integrated package.
+
+Use the new readable flag for an Origin-only passive run:
+
+```bash
+cachaza run -d example.com -stages origin -origin-ip -origin-mode passive -format all -o example-origin
+```
+
+For bounded direct verification:
+
+```bash
+cachaza run -d example.com -origin-ip -origin-mode balanced \
+  -active -authorized -format all -o example-origin-validated
+```
+
+The resulting `report.json` contains a compact top-level `origin` object and the complete `origin_discovery` record. `rest/origin/final-ranking.json` and `.csv` remain the authoritative Origin-specific ranking artifacts.
+
 ## 0.10 automatic Origin discovery
 
 Origin IPs are no longer supplied or approved one at a time. The options `-approve-origin-ip` and `-approve-origin-candidates-file` are intentionally absent. Use `-origin-auto`; passive mode needs no active gate, while Direct-origin validation requires the engagement-wide `-active -authorized` acknowledgement.

@@ -12,7 +12,13 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import cachaza.origin as origin_module
-from cachaza.adapters.origin import source_family
+from cachaza.adapters.origin import (
+    fofa_observations,
+    otx_observations,
+    source_family,
+    urlscan_observations,
+    viewdns_resolutions,
+)
 from cachaza.cli import main
 from cachaza.console import Console
 from cachaza.external import CommandRunner
@@ -38,6 +44,7 @@ from cachaza.origin import (
     should_auto_validate,
 )
 from cachaza.workspace import RunWorkspace
+from cachaza.html_report import render_html
 from cachaza.reports import build_report_data
 
 
@@ -89,6 +96,20 @@ class OneShotServer:
 
 
 class OriginSelectionTests(unittest.TestCase):
+    def test_candidate_exposes_heuristic_probability_and_band(self) -> None:
+        item = candidate(score=70)
+        payload = item.to_dict()
+        self.assertEqual(payload["origin_probability"], 0.7)
+        self.assertEqual(payload["origin_probability_percent"], 70)
+        self.assertEqual(payload["confidence_band"], "probable")
+        self.assertEqual(payload["probability_method"], "heuristic_correlation_score_v1")
+
+    def test_rejected_infrastructure_is_never_exposed_as_origin_probability(self) -> None:
+        item = candidate(score=90)
+        item.classification = "cdn_edge"
+        self.assertEqual(item.origin_probability_percent, 0)
+        self.assertEqual(item.confidence_band, "inconclusive")
+
     def test_strong_correlated_candidate_is_selected_without_manual_ip(self) -> None:
         item = candidate()
         allowed, reasons = should_auto_validate(item, OriginConfig())
@@ -151,6 +172,29 @@ class OriginSelectionTests(unittest.TestCase):
 
 
 class OriginTransportTests(unittest.TestCase):
+    def test_integrated_passive_provider_parsers_return_origin_observations(self) -> None:
+        urlscan_payload = {
+            "results": [{
+                "page": {"ip": "93.184.216.34", "domain": "example.com", "asn": "64500", "asnname": "Example"},
+                "task": {"time": "2026-01-01T00:00:00Z", "url": "https://example.com/"},
+            }]
+        }
+        with patch("cachaza.adapters.origin.request_json", return_value=urlscan_payload):
+            rows, _ = urlscan_observations("example.com", api_key="key", maximum=10, timeout=1, retries=0)
+        self.assertEqual(rows[0].relationship, "urlscan_main_document")
+        self.assertEqual(rows[0].metadata["asns"], ["AS64500"])
+
+        with patch("cachaza.adapters.origin.request_json", return_value={"response": {"records": [{"ip": "93.184.216.35", "lastseen": "2026-01-01", "owner": "Example"}]}}):
+            rows, _ = viewdns_resolutions("example.com", api_key="key", maximum=10, timeout=1, retries=0)
+        self.assertEqual(rows[0].source_family, "viewdns")
+
+        with patch("cachaza.adapters.origin.request_json", return_value={"results": [["93.184.216.36", 443, "https://example.com", "example.com", "Example", "cert", "AS64500", "Example", "2026-01-01"]]}):
+            rows, _ = fofa_observations("example.com", email="user@example.test", api_key="key", maximum=10, timeout=1, retries=0)
+        self.assertEqual(rows[0].source_family, "fofa")
+
+        with patch("cachaza.adapters.origin.request_json", side_effect=[{"passive_dns": [{"address": "93.184.216.37", "hostname": "example.com"}]}, {"url_list": []}]):
+            rows, _ = otx_observations("example.com", api_key="", maximum=10, timeout=1, retries=0)
+        self.assertEqual(rows[0].source_family, "otx")
     def test_direct_http_uses_target_host_and_only_safe_headers(self) -> None:
         response = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nSet-Cookie: session=value; HttpOnly\r\nContent-Length: 2\r\n\r\nok"
         with OneShotServer(response) as server:
@@ -367,6 +411,56 @@ class OriginEngineTests(unittest.TestCase):
         self.assertEqual(origin_module._classification_for_score(50), "possible_origin")
         self.assertEqual(origin_module._classification_for_score(49), "related_infrastructure")
 
+    def test_final_ranking_exposes_origin_ip_and_all_candidate_probabilities(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            engine = self._engine(Path(temp), OriginConfig(mode="passive"))
+            plausible = candidate(score=70)
+            rejected = candidate("93.184.216.35", score=90)
+            rejected.classification = "cdn_edge"
+            ranking = engine._ranking(
+                "example.com",
+                [rejected, plausible],
+                [],
+                OriginBudget(engine.config),
+                {"provider": "Cloudflare", "confidence": 95, "signals": []},
+            )
+        self.assertEqual(ranking["origin_ip"], plausible.ip)
+        self.assertEqual(ranking["origin_probability_percent"], 70)
+        self.assertEqual(ranking["confidence_band"], "probable")
+        self.assertEqual(len(ranking["candidate_probabilities"]), 2)
+        self.assertEqual(ranking["candidate_probabilities"][0]["origin_probability_percent"], 0)
+        grouped = ranking["primary"] + ranking["additional"] + ranking["historical"] + ranking["related_infrastructure"]
+        self.assertEqual(len(grouped), 2)
+
+    def test_html_report_renders_origin_ranking_and_graph_probability(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = RunWorkspace(Path(temp))
+            workspace.add(Finding("input", "scope", "domain", "example.com", True, {"root": True}))
+            workspace.add(Finding("origin", "origin-correlation", "origin_candidate", "93.184.216.34", False, {
+                "root": "example.com", "ip": "93.184.216.34", "score": 82,
+                "origin_probability_percent": 82, "confidence_band": "high",
+                "classification": "high_confidence_origin", "relationship": "Origin correlation",
+            }))
+            workspace.write_json("origin/final-ranking.json", {
+                "status": "completed", "mode": "balanced", "origin_ip": "93.184.216.34",
+                "origin_probability": 0.82, "origin_probability_percent": 82,
+                "confidence_band": "high", "confidence_score": 82,
+                "classification": "high_confidence_origin", "candidates_collected": 1,
+                "direct_requests_performed": 4, "candidate_probabilities": [{
+                    "rank": 1, "ip": "93.184.216.34", "origin_probability_percent": 82,
+                    "confidence_band": "high", "classification": "high_confidence_origin",
+                    "eligible_origin": True, "sources": ["virustotal", "direct_validation"],
+                }], "primary": [], "additional": [], "historical": [],
+                "related_infrastructure": [], "cdn_waf_detected": {"provider": "Cloudflare"},
+            })
+            report = build_report_data(workspace, TargetSpec(domains=["example.com"]), version="test", failures=[])
+        document = render_html(report)
+        node = next(item for item in report["graph"]["nodes"] if item["kind"] == "origin_candidate")
+        self.assertEqual(report["origin"]["ip"], "93.184.216.34")
+        self.assertEqual(node["origin_probability_percent"], 82)
+        self.assertIn("Most likely real origin IP", document)
+        self.assertIn("Origin probability 82 percent", document)
+
     def test_strong_unreachable_candidate_remains_inconclusive(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             config = OriginConfig(ports=[443], maximum_total_requests=2, maximum_requests_per_ip=2, rate_limit_per_second=20)
@@ -456,12 +550,23 @@ class OriginCliTests(unittest.TestCase):
             self.assertEqual(budget["maximum_requests_per_ip"], 10)
             self.assertEqual(budget["maximum_concurrency"], 2)
 
+    def test_unknown_origin_provider_is_rejected(self) -> None:
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            code = main([
+                "run", "-d", "example.com", "-origin-ip", "-origin-mode", "passive",
+                "-origin-query-engines", "virustotal,unknown-provider", "-dry-run", "-silent",
+            ])
+        self.assertEqual(code, 2)
+        self.assertIn("unsupported providers: unknown-provider", errors.getvalue())
+
     def test_help_has_automatic_origin_options_and_no_manual_approval_flags(self) -> None:
         output = io.StringIO()
         with contextlib.redirect_stdout(output), self.assertRaises(SystemExit):
             main(["-h"])
         text = output.getvalue()
         self.assertIn("-origin-auto", text)
+        self.assertIn("-origin-ip", text)
         self.assertIn("-origin-mode", text)
         self.assertNotIn("approve-origin-ip", text)
         self.assertNotIn("approve-origin-candidates-file", text)

@@ -31,11 +31,17 @@ from typing import Any, Callable, Iterable
 
 from .adapters.origin import (
     CandidateObservation,
+    censys_observations,
     collect_resolved_names,
     collect_workspace_observations,
+    fofa_observations,
+    otx_observations,
     resolve_host,
     run_dns_permutations,
     securitytrails_resolutions,
+    shodan_observations,
+    urlscan_observations,
+    viewdns_resolutions,
     virustotal_resolutions,
 )
 from .console import Console
@@ -50,6 +56,11 @@ ORIGIN_WARNING = (
     "A high-confidence result indicates strong technical correlation. "
     "It does not prove administrative ownership, current production use or authorization "
     "to perform further testing against the IP."
+)
+
+ORIGIN_PROBABILITY_NOTICE = (
+    "Origin probability is the bounded Cachaza correlation score expressed as a percentage; "
+    "it is heuristic, not a statistically calibrated probability or proof of ownership."
 )
 
 FORBIDDEN_REQUEST_HEADERS = {
@@ -1215,6 +1226,7 @@ class OriginEngine:
         self.cloudflare: list[ipaddress._BaseNetwork] = []
         self.include_networks = _read_cidr_file(config.include_cidr_file)
         self.exclude_networks = _read_cidr_file(config.exclude_cidr_file)
+        self.provider_status: dict[str, dict[str, Any]] = {}
 
     def _log(self, message: str) -> None:
         self.console.info(f"[ORIGIN] {message}")
@@ -1273,9 +1285,13 @@ class OriginEngine:
         ).strip()
         if "virustotal" in engines and vt_key:
             providers.append(("virustotal", vt_key, virustotal_resolutions))
+        elif "virustotal" in engines:
+            self.provider_status["virustotal"] = {"status": "skipped", "reason": "credential_not_configured", "findings": 0}
         securitytrails_key = self.credentials.get("SECURITYTRAILS_API_KEY", "").strip()
         if "securitytrails" in engines and securitytrails_key:
             providers.append(("securitytrails", securitytrails_key, securitytrails_resolutions))
+        elif "securitytrails" in engines:
+            self.provider_status["securitytrails"] = {"status": "skipped", "reason": "credential_not_configured", "findings": 0}
         for provider, key, fetcher in providers:
             cache = self.directory / "raw" / f"{provider}-{root}.json"
             if self.workspace.resume and cache.is_file():
@@ -1291,6 +1307,7 @@ class OriginEngine:
                             except ValueError:
                                 continue
                             output.append(CandidateObservation(ip, "virustotal", "virustotal", root, "historical_dns", True, last_seen=str(attributes.get("date") or "") or None, metadata={"historical": True}))
+                        self.provider_status[provider] = {"status": "ok", "cached": True, "findings": len(rows)}
                         continue
                     if provider == "securitytrails" and isinstance(payload, dict):
                         for record_type, family_payload in payload.items():
@@ -1304,6 +1321,7 @@ class OriginEngine:
                                     except ValueError:
                                         continue
                                     output.append(CandidateObservation(ip, "securitytrails", "securitytrails", root, "historical_dns", True, last_seen=str(row.get("last_seen") or "") or None, metadata={"historical": True, "record_type": str(record_type).upper()}))
+                        self.provider_status[provider] = {"status": "ok", "cached": True, "findings": len(output)}
                         continue
                 except (OSError, json.JSONDecodeError):
                     pass
@@ -1317,8 +1335,134 @@ class OriginEngine:
                 )
                 cache.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
                 output.extend(observations)
+                self.provider_status[provider] = {"status": "ok", "cached": False, "findings": len(observations)}
             except (HttpError, OSError, ValueError) as exc:
                 self.console.warn(f"[ORIGIN] {provider} historical DNS unavailable: {exc}")
+                self.provider_status[provider] = {"status": "error", "findings": 0, "error": str(exc)}
+
+        def collect_provider(
+            provider: str,
+            fetcher: Callable[[], tuple[list[CandidateObservation], dict[str, Any]]],
+        ) -> None:
+            cache = self.directory / "raw" / f"{provider}-{root}.json"
+            if self.workspace.resume and cache.is_file():
+                try:
+                    cached = json.loads(cache.read_text(encoding="utf-8"))
+                    rows = cached.get("observations", []) if isinstance(cached, dict) else []
+                    observations = [
+                        CandidateObservation(**row)
+                        for row in rows
+                        if isinstance(row, dict)
+                    ]
+                    output.extend(observations)
+                    self.provider_status[provider] = {"status": "ok", "cached": True, "findings": len(observations)}
+                    return
+                except (OSError, json.JSONDecodeError, TypeError):
+                    pass
+            try:
+                observations, payload = fetcher()
+                cache.write_text(
+                    json.dumps(
+                        {
+                            "provider": provider,
+                            "observations": [asdict(item) for item in observations],
+                            "raw": payload,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                output.extend(observations)
+                self.provider_status[provider] = {"status": "ok", "cached": False, "findings": len(observations)}
+            except (HttpError, OSError, ValueError) as exc:
+                self.console.warn(f"[ORIGIN] {provider} unavailable: {exc}")
+                self.provider_status[provider] = {"status": "error", "findings": 0, "error": str(exc)}
+
+        maximum = self.config.maximum_history_results
+        if "urlscan" in engines:
+            urlscan_key = self.credentials.get("URLSCAN_API_KEY", "").strip()
+            if urlscan_key:
+                collect_provider(
+                    "urlscan",
+                    lambda: urlscan_observations(
+                        root, api_key=urlscan_key, maximum=maximum,
+                        timeout=self.timeout, retries=self.retries,
+                    ),
+                )
+            else:
+                self.provider_status["urlscan"] = {"status": "skipped", "reason": "credential_not_configured", "findings": 0}
+        if "censys" in engines:
+            censys_key = (
+                self.credentials.get("CENSYS_API_KEY", "")
+                or self.credentials.get("CENSYS_API_TOKEN", "")
+            ).strip()
+            if censys_key:
+                collect_provider(
+                    "censys",
+                    lambda: censys_observations(
+                        root,
+                        api_key=censys_key,
+                        organization_id=(
+                            self.credentials.get("CENSYS_ORG_ID", "")
+                            or self.credentials.get("CENSYS_ORGANIZATION_ID", "")
+                        ).strip(),
+                        maximum=maximum,
+                        timeout=self.timeout,
+                        retries=self.retries,
+                    ),
+                )
+            else:
+                self.provider_status["censys"] = {"status": "skipped", "reason": "credential_not_configured", "findings": 0}
+        if "shodan" in engines:
+            shodan_key = self.credentials.get("SHODAN_API_KEY", "").strip()
+            if shodan_key:
+                collect_provider(
+                    "shodan",
+                    lambda: shodan_observations(
+                        root, api_key=shodan_key, maximum=maximum,
+                        timeout=self.timeout, retries=self.retries,
+                    ),
+                )
+            else:
+                self.provider_status["shodan"] = {"status": "skipped", "reason": "credential_not_configured", "findings": 0}
+        if "otx" in engines:
+            collect_provider(
+                "otx",
+                lambda: otx_observations(
+                    root,
+                    api_key=self.credentials.get("OTX_API_KEY", "").strip(),
+                    maximum=maximum,
+                    timeout=self.timeout,
+                    retries=self.retries,
+                ),
+            )
+        if "viewdns" in engines:
+            viewdns_key = self.credentials.get("VIEWDNS_API_KEY", "").strip()
+            if viewdns_key:
+                collect_provider(
+                    "viewdns",
+                    lambda: viewdns_resolutions(
+                        root, api_key=viewdns_key, maximum=maximum,
+                        timeout=self.timeout, retries=self.retries,
+                    ),
+                )
+            else:
+                self.provider_status["viewdns"] = {"status": "skipped", "reason": "credential_not_configured", "findings": 0}
+        if "fofa" in engines:
+            fofa_email = self.credentials.get("FOFA_EMAIL", "").strip()
+            fofa_key = self.credentials.get("FOFA_API_KEY", "").strip()
+            if fofa_email and fofa_key:
+                collect_provider(
+                    "fofa",
+                    lambda: fofa_observations(
+                        root, email=fofa_email, api_key=fofa_key, maximum=maximum,
+                        timeout=self.timeout, retries=self.retries,
+                    ),
+                )
+            else:
+                self.provider_status["fofa"] = {"status": "skipped", "reason": "credential_not_configured", "findings": 0}
         return output[: self.config.maximum_history_results]
 
     def _classify_network(self, ip: str, baseline_ips: set[str], edge_provider: str = "Detected public edge") -> OriginNetwork:
@@ -1732,15 +1876,38 @@ class OriginEngine:
 
     def _ranking(self, root: str, candidates: list[OriginCandidate], selected: list[OriginCandidate], budget: OriginBudget, cdn: dict[str, Any], *, status: str = "completed") -> dict[str, Any]:
         ranked = sorted(candidates, key=lambda item: (-item.final_score, -item.independent_source_count, item.ip))
-        probable = [item for item in ranked if item.validation_status in {"high_confidence_origin", "probable_origin", "possible_origin", "protected_origin"} or (self.config.mode == "passive" and item.initial_score >= self.config.minimum_score and item.classification == "origin_candidate")]
+        passive_ranking = (
+            self.config.mode == "passive"
+            or not self.config.direct_validation
+            or not self.config.auto_verify
+        )
+        probable = [item for item in ranked if item.validation_status in {"high_confidence_origin", "probable_origin", "possible_origin", "protected_origin"} or (passive_ranking and item.initial_score >= self.config.minimum_score and item.classification == "origin_candidate")]
         primary = probable[:1]
         additional = probable[1:]
         historical = [item for item in ranked if item.classification == "historical_only"]
-        rejected = [item for item in ranked if item.classification in {"rejected", "cdn_edge", "third_party_service", "related_infrastructure", "not_matching"}]
-        highest = primary[0] if primary else (ranked[0] if ranked else None)
+        rejected = [
+            item for item in ranked if item not in probable and item not in historical
+        ]
+        highest = primary[0] if primary else None
         message = ""
         if not primary:
             message = "No publicly reachable origin identified. Architecture may use a private origin, tunnel or strict ingress controls."
+        candidate_probabilities = [
+            {
+                "rank": index,
+                "ip": item.ip,
+                "origin_probability": item.origin_probability,
+                "origin_probability_percent": item.origin_probability_percent,
+                "confidence_band": item.confidence_band,
+                "classification": item.classification,
+                "score": item.final_score,
+                "validated": item.validation_status != "not_validated",
+                "independent_source_count": item.independent_source_count,
+                "sources": item.independent_source_families,
+                "eligible_origin": item in probable,
+            }
+            for index, item in enumerate(ranked, start=1)
+        ]
         return {
             "status": status,
             "automatic_origin_discovery": status,
@@ -1751,16 +1918,23 @@ class OriginEngine:
             "candidates_rejected_before_validation": len([item for item in candidates if item not in selected]),
             "candidates_actively_validated": len([item for item in selected if item.validation_status != "not_validated"]),
             "direct_requests_performed": budget.consumed,
+            "origin_ip": highest.ip if highest else None,
+            "origin_probability": highest.origin_probability if highest else 0.0,
+            "origin_probability_percent": highest.origin_probability_percent if highest else 0,
+            "confidence_band": highest.confidence_band if highest else "inconclusive",
             "highest_confidence_candidate": highest.ip if highest else None,
-            "confidence_score": highest.final_score if highest else 0,
+            "confidence_score": highest.origin_probability_percent if highest else 0,
             "classification": highest.classification if highest else "inconclusive",
             "manual_confirmation_recommended": True,
+            "candidate_probabilities": candidate_probabilities,
+            "provider_status": dict(sorted(self.provider_status.items())),
             "primary": [item.to_dict() for item in primary],
             "additional": [item.to_dict() for item in additional],
             "historical": [item.to_dict() for item in historical],
             "related_infrastructure": [item.to_dict() for item in rejected],
             "message": message,
             "warning": ORIGIN_WARNING,
+            "probability_notice": ORIGIN_PROBABILITY_NOTICE,
         }
 
     def _cached_validations(self) -> dict[str, dict[str, Any]]:
@@ -1810,7 +1984,7 @@ class OriginEngine:
 
     def _write_ranking_csv(self, ranking: dict[str, Any]) -> None:
         path = self.directory / "final-ranking.csv"
-        fields = ["ip", "initial_score", "final_score", "classification", "asn", "organization", "historical_dns", "certificate_evidence", "content_similarity", "favicon_match", "tls_result", "http_result", "last_observed", "validation_requests", "rejection_reason"]
+        fields = ["ip", "origin_probability", "origin_probability_percent", "confidence_band", "probability_method", "initial_score", "final_score", "classification", "asn", "organization", "historical_dns", "certificate_evidence", "content_similarity", "favicon_match", "tls_result", "http_result", "last_observed", "validation_requests", "rejection_reason"]
         rows = ranking.get("primary", []) + ranking.get("additional", []) + ranking.get("historical", []) + ranking.get("related_infrastructure", [])
         with path.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=fields)
@@ -1819,7 +1993,7 @@ class OriginEngine:
                 evidence = item.get("evidence", [])
                 validation = item.get("validation", {})
                 writer.writerow({
-                    "ip": item.get("ip"), "initial_score": item.get("initial_score"), "final_score": item.get("final_score"), "classification": item.get("classification"),
+                    "ip": item.get("ip"), "origin_probability": item.get("origin_probability", 0), "origin_probability_percent": item.get("origin_probability_percent", 0), "confidence_band": item.get("confidence_band", "inconclusive"), "probability_method": item.get("probability_method", "heuristic_correlation_score_v1"), "initial_score": item.get("initial_score"), "final_score": item.get("final_score"), "classification": item.get("classification"),
                     "asn": item.get("network", {}).get("asn", ""), "organization": item.get("network", {}).get("organization", ""),
                     "historical_dns": any(entry.get("code") == "historical_apex_dns" for entry in evidence),
                     "certificate_evidence": ",".join(entry.get("code", "") for entry in evidence if "certificate" in entry.get("code", "")),
@@ -1981,7 +2155,7 @@ class OriginEngine:
         self.workspace.write_json("origin/final-ranking.json", ranking)
         self._write_ranking_csv(ranking)
         for item in ranking["primary"] + ranking["additional"]:
-            self.add_finding("origin", "origin-correlation", "origin_candidate", item["ip"], False, {"root": root, "ip": item["ip"], "score": item["final_score"], "classification": item["classification"], "relationship": "Origin correlation", "manual_confirmation_recommended": True})
+            self.add_finding("origin", "origin-correlation", "origin_candidate", item["ip"], False, {"root": root, "ip": item["ip"], "score": item["final_score"], "origin_probability": item["origin_probability"], "origin_probability_percent": item["origin_probability_percent"], "confidence_band": item["confidence_band"], "probability_method": item["probability_method"], "classification": item["classification"], "relationship": "Origin correlation", "manual_confirmation_recommended": True})
         for item in rejected:
             self.add_finding("origin", "origin-network-classifier", "origin_rejected", item.ip, False, {"root": root, "ip": item.ip, "score": item.final_score, "classification": item.classification, "reasons": item.rejection_reasons})
         highest = ranking.get("highest_confidence_candidate") or "none"
@@ -1989,7 +2163,7 @@ class OriginEngine:
 
 
 def render_origin_summary(ranking: dict[str, Any]) -> str:
-    highest = ranking.get("highest_confidence_candidate") or "none"
+    highest = ranking.get("origin_ip") or ranking.get("highest_confidence_candidate") or "none"
     return "\n".join([
         f"Automatic origin discovery: {ranking.get('status', 'unknown')}",
         f"Mode: {ranking.get('mode', 'unknown')}",
@@ -1998,11 +2172,13 @@ def render_origin_summary(ranking: dict[str, Any]) -> str:
         f"Candidates rejected before validation: {ranking.get('candidates_rejected_before_validation', 0)}",
         f"Candidates actively validated: {ranking.get('candidates_actively_validated', 0)}",
         f"Direct requests performed: {ranking.get('direct_requests_performed', 0)}",
-        f"Highest-confidence candidate: {highest}",
-        f"Confidence score: {ranking.get('confidence_score', 0)}/100",
+        f"Origin IP: {highest}",
+        f"Origin probability: {ranking.get('origin_probability_percent', ranking.get('confidence_score', 0))}%",
+        f"Confidence band: {ranking.get('confidence_band', 'inconclusive')}",
         f"Classification: {ranking.get('classification', 'inconclusive')}",
         "Manual confirmation recommended: yes",
         ranking.get("message", ""),
+        ranking.get("probability_notice", ORIGIN_PROBABILITY_NOTICE),
         ORIGIN_WARNING,
     ]).strip()
 

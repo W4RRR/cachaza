@@ -123,6 +123,42 @@ class OriginCandidate:
     def score(self) -> int:
         return self.final_score if self.validation_status != "not_validated" else self.initial_score
 
+    @property
+    def origin_probability_percent(self) -> int:
+        """Return the bounded heuristic likelihood that this address is an origin.
+
+        Cachaza does not have a statistically calibrated training set, so this is
+        deliberately the explainable correlation score expressed as a percentage.
+        Candidates rejected as edge or third-party infrastructure are never exposed
+        as plausible origins even if they retain contextual evidence.
+        """
+        if self.classification in {
+            "cdn_edge",
+            "rejected",
+            "third_party_service",
+            "not_matching",
+            "mail_infrastructure",
+        }:
+            return 0
+        return max(0, min(100, int(round(self.score))))
+
+    @property
+    def origin_probability(self) -> float:
+        return self.origin_probability_percent / 100
+
+    @property
+    def confidence_band(self) -> str:
+        probability = self.origin_probability_percent
+        if probability >= 80:
+            return "high"
+        if probability >= 65:
+            return "probable"
+        if probability >= 50:
+            return "possible"
+        if probability > 0:
+            return "low"
+        return "inconclusive"
+
     def add_evidence(self, evidence: OriginEvidence) -> bool:
         # A signal can be corroborated by several tools, but its score is applied
         # once. Independent providers remain visible through source_family.
@@ -149,6 +185,10 @@ class OriginCandidate:
             "independent_source_families": self.independent_source_families,
             "independent_source_count": self.independent_source_count,
             "has_strong_evidence": self.has_strong_evidence,
+            "origin_probability": self.origin_probability,
+            "origin_probability_percent": self.origin_probability_percent,
+            "confidence_band": self.confidence_band,
+            "probability_method": "heuristic_correlation_score_v1",
         }
 
 
@@ -184,7 +224,7 @@ class OriginConfig:
     historical_dns: bool = True
     maximum_history_results: int = 100
     query_engines: list[str] = field(
-        default_factory=lambda: ["virustotal", "securitytrails", "censys", "shodan", "urlscan", "uncover"]
+        default_factory=lambda: ["virustotal", "securitytrails", "censys", "shodan", "urlscan", "uncover", "viewdns", "fofa"]
     )
     exclude_providers: list[str] = field(default_factory=list)
     exclude_cidr_file: str | None = None
