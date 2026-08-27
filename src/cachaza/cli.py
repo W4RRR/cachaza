@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .ai_reporting import DEFAULT_OPENROUTER_MODEL
 from .console import Console
 from .credentials import load_credentials
 from .external import doctor_rows
@@ -295,6 +296,31 @@ its findings. Direct probes must be explicitly authorized with -active.""",
     run.add_argument("-tenant-script", help="path to tenant-domains.sh")
     run.add_argument("-fingerprints", help="SHA-1 fingerprint file for Shodan signatures")
     run.add_argument("-api-config", help="optional KEY=value credential file parsed as data, never executed")
+    ai = run.add_argument_group("AI-assisted reporting (OpenRouter)")
+    ai.add_argument(
+        "-ai-report", "-openrouter-report", dest="ai_report", action="store_true",
+        help=(
+            "opt in to an OpenRouter editorial pass for executive HTML/PDF prose; "
+            "requires OPENROUTER_API_KEY and sends a bounded report digest to OpenRouter"
+        ),
+    )
+    ai.add_argument(
+        "-ai-model", "-openrouter-model", dest="ai_model",
+        default=DEFAULT_OPENROUTER_MODEL, metavar="MODEL",
+        help=f"OpenRouter model slug (default: {DEFAULT_OPENROUTER_MODEL})",
+    )
+    ai.add_argument(
+        "-ai-language", choices=("en", "es"), default="en",
+        help="language for the AI executive narrative: en or es (default: en)",
+    )
+    ai.add_argument(
+        "-ai-timeout", type=int, default=60, metavar="SECONDS",
+        help="OpenRouter request timeout, 10-180 seconds (default: 60)",
+    )
+    ai.add_argument(
+        "-ai-max-tokens", type=int, default=1_400, metavar="N",
+        help="maximum AI narrative tokens, 500-3000 (default: 1400)",
+    )
     run.add_argument(
         "-shodan-mode",
         choices=("off", "count", "search"),
@@ -676,6 +702,21 @@ def _validate_run_args(args: argparse.Namespace, target: TargetSpec) -> None:
     if args.blackwidow_depth is not None and not 1 <= args.blackwidow_depth <= 10:
         raise ValidationError("-blw LEVEL must be between 1 and 10")
     _validate_ports(args.ports)
+    if not 10 <= args.ai_timeout <= 180:
+        raise ValidationError("-ai-timeout must be between 10 and 180 seconds")
+    if not 500 <= args.ai_max_tokens <= 3_000:
+        raise ValidationError("-ai-max-tokens must be between 500 and 3000")
+    if not re.fullmatch(r"[A-Za-z0-9._~:/-]{2,160}", args.ai_model):
+        raise ValidationError("-ai-model must be a valid OpenRouter model slug")
+    if args.ai_report:
+        try:
+            credentials = load_credentials(args.api_config)
+        except FileNotFoundError as exc:
+            raise ValidationError(str(exc)) from exc
+        if not credentials.get("OPENROUTER_API_KEY", "").strip():
+            raise ValidationError(
+                "-ai-report requires OPENROUTER_API_KEY in the environment or -api-config file"
+            )
     active_without_gate = sorted(set(requested_stages) & ACTIVE_STAGES) if not args.active else []
     if active_without_gate:
         raise ValidationError(
@@ -811,6 +852,11 @@ def command_run(args: argparse.Namespace, console: Console) -> int:
         allow_large_ranges=args.allow_large_ranges,
         report_formats=report_formats,
         report_color=not args.no_color,
+        ai_report=args.ai_report,
+        ai_model=args.ai_model,
+        ai_language=args.ai_language,
+        ai_timeout=args.ai_timeout,
+        ai_max_tokens=args.ai_max_tokens,
         whois=args.whois,
         wappalyzer=args.wappalyzer,
         api_config=args.api_config,

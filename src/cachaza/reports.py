@@ -13,7 +13,9 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 from xml.sax.saxutils import escape as xml_escape
 
+from .ai_reporting import AIReportConfig, generate_ai_assistance
 from .html_report import render_html
+from .http import HttpError
 from .models import Finding, TargetSpec, utc_now
 from .workspace import RunWorkspace
 
@@ -383,10 +385,215 @@ def _graph_identifier(kind: str, value: str) -> str:
     return f"{kind}:{value}"
 
 
+def _build_origin_trace(origin: dict[str, Any]) -> dict[str, Any]:
+    """Explain how the leading Origin IP was reached without inflating certainty."""
+
+    if not isinstance(origin, dict):
+        return {}
+    origin_ip = str(
+        origin.get("origin_ip") or origin.get("highest_confidence_candidate") or ""
+    ).strip()
+    if not origin_ip:
+        return {}
+    primary_rows = origin.get("primary", [])
+    primary = next(
+        (
+            item
+            for item in primary_rows
+            if isinstance(item, dict) and str(item.get("ip") or "") == origin_ip
+        ),
+        {},
+    )
+    evidence = [item for item in primary.get("evidence", []) if isinstance(item, dict)]
+    source_families = sorted(
+        {
+            str(value)
+            for value in primary.get("independent_source_families", [])
+            if str(value).strip()
+        }
+        | {
+            str(item.get("source_family"))
+            for item in evidence
+            if str(item.get("source_family") or "").strip()
+        }
+    )
+    passive_evidence = [
+        item
+        for item in evidence
+        if item.get("source_family")
+        not in {"direct_validation", "correlation", "network_classification"}
+    ]
+    direct_evidence = [
+        item for item in evidence if item.get("source_family") == "direct_validation"
+    ]
+    positive_direct = [
+        item for item in direct_evidence if int(item.get("score", 0) or 0) > 0
+    ]
+    direct_requests = int(origin.get("direct_requests_performed", 0) or 0)
+    classification = str(origin.get("classification") or "inconclusive")
+    validation_status = str(primary.get("validation_status") or "not_validated")
+    direct_family_present = "direct_validation" in source_families
+    direct_match_present = bool(positive_direct) or (
+        direct_family_present and not evidence
+    )
+    direct_path_validated = bool(
+        direct_requests
+        and direct_match_present
+        and classification
+        in {"high_confidence_origin", "probable_origin", "possible_origin"}
+        and validation_status != "protected_origin"
+    )
+    protected = classification == "protected_origin" or validation_status == "protected_origin"
+    if direct_path_validated:
+        status = "direct_path_validated"
+        status_label = "CDN/WAF boundary bypass validated"
+        severity = "critical"
+    elif protected:
+        status = "origin_protected"
+        status_label = "Origin correlated; direct ingress remains protected"
+        severity = "warning"
+    elif direct_requests:
+        status = "direct_validation_inconclusive"
+        status_label = "Direct validation inconclusive"
+        severity = "warning"
+    else:
+        status = "passive_correlation_only"
+        status_label = "Likely origin; direct validation not performed"
+        severity = "information"
+    cdn = origin.get("cdn_waf_detected", {})
+    cdn_provider = str(cdn.get("provider") or "Unknown") if isinstance(cdn, dict) else "Unknown"
+    cdn_signals = [
+        str(value)
+        for value in (cdn.get("signals", []) if isinstance(cdn, dict) else [])
+        if str(value).strip()
+    ]
+    passive_tools = sorted(
+        {
+            str(item.get("source") or item.get("source_family"))
+            for item in passive_evidence
+            if str(item.get("source") or item.get("source_family") or "").strip()
+        }
+        or {value for value in source_families if value != "direct_validation"}
+    )
+    validation_signals = [
+        str(item.get("description") or item.get("code"))
+        for item in positive_direct
+        if str(item.get("description") or item.get("code") or "").strip()
+    ]
+    if direct_family_present and not validation_signals:
+        validation_signals.append("Direct HTTP/TLS correlation recorded")
+    passive_signals = [
+        str(item.get("description") or item.get("code"))
+        for item in passive_evidence
+        if str(item.get("description") or item.get("code") or "").strip()
+    ]
+    probability = int(
+        origin.get("origin_probability_percent", origin.get("confidence_score", 0)) or 0
+    )
+    steps = [
+        {
+            "number": 1,
+            "tactic": "Establish reference",
+            "technique": "Public edge baseline",
+            "procedure": f"Captured the public DNS, HTTP and TLS posture for the target behind {cdn_provider}.",
+            "tools": ["DNS", "HTTP", "TLS"],
+            "evidence": cdn_signals,
+            "status": "completed",
+            "relationship": "public baseline",
+        },
+        {
+            "number": 2,
+            "tactic": "Discover candidate infrastructure",
+            "technique": "Passive origin correlation",
+            "procedure": (
+                "Collected historical/current resolution, certificate, scan-index and "
+                "provider observations, then retained candidate public addresses."
+            ),
+            "tools": passive_tools or ["normalized OSINT evidence"],
+            "evidence": passive_signals,
+            "status": "completed",
+            "relationship": "candidate discovery",
+        },
+        {
+            "number": 3,
+            "tactic": "Separate edge from origin",
+            "technique": "CDN/WAF range exclusion and scoring",
+            "procedure": (
+                "Rejected known CDN, private, mail-only and clearly third-party infrastructure; "
+                "deduplicated source families and applied the bounded correlation score."
+            ),
+            "tools": ["network classifier", "correlation engine"],
+            "evidence": [
+                f"{len(source_families)} independent source families",
+                f"{origin.get('candidates_rejected_before_validation', 0)} candidates rejected before validation",
+            ],
+            "status": "completed",
+            "relationship": "edge exclusion & scoring",
+        },
+        {
+            "number": 4,
+            "tactic": "Validate direct exposure",
+            "technique": "Authorized direct-origin HTTP/TLS validation",
+            "procedure": (
+                "Connected to the candidate IP using only bounded HEAD/GET requests while "
+                "preserving the target hostname in HTTP Host and TLS SNI, then compared "
+                "certificates, redirects, content fingerprints, titles, cookies, headers and static assets."
+            ),
+            "tools": ["Cachaza Direct-origin validator"],
+            "evidence": validation_signals,
+            "status": (
+                "validated" if direct_path_validated else "protected" if protected
+                else "inconclusive" if direct_requests else "not performed"
+            ),
+            "relationship": "direct validation",
+        },
+        {
+            "number": 5,
+            "tactic": "Conclude attribution",
+            "technique": "Evidence-backed origin classification",
+            "procedure": (
+                f"Ranked {origin_ip} first with a {probability}% heuristic correlation score "
+                f"and {origin.get('confidence_band', 'inconclusive')} confidence."
+            ),
+            "tools": ["Cachaza reporting engine"],
+            "evidence": [classification, origin.get("probability_notice", "")],
+            "status": "completed",
+            "relationship": "attribution conclusion",
+        },
+    ]
+    return {
+        "status": status,
+        "status_label": status_label,
+        "severity": severity,
+        "origin_ip": origin_ip,
+        "cdn_waf_provider": cdn_provider,
+        "probability_percent": max(0, min(100, probability)),
+        "confidence_band": str(origin.get("confidence_band") or "inconclusive"),
+        "classification": classification,
+        "source_families": source_families,
+        "passive_tools": passive_tools,
+        "validation_signals": validation_signals,
+        "direct_requests": direct_requests,
+        "steps": steps,
+        "summary": (
+            f"{origin_ip} was reached through passive infrastructure correlation, CDN/WAF "
+            f"range exclusion and bounded scoring"
+            + (
+                ", then validated as a directly reachable application path using the original Host/SNI."
+                if direct_path_validated else ". Direct reachability was not established."
+            )
+        ),
+        "qualification": (
+            "A validated direct path demonstrates technical reachability outside the public "
+            "CDN/WAF path; it does not prove administrative ownership or authorize further testing."
+        ),
+    }
+
+
 def _build_graph(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     """Build a relationship graph from finding metadata and normalized values."""
     nodes: dict[str, dict[str, Any]] = {}
-    edges: dict[tuple[str, str, str], dict[str, str]] = {}
+    edges: dict[tuple[str, str, str], dict[str, Any]] = {}
     subdomain_summary = data.get("subdomain_summary") or build_subdomain_summary(
         data.get("findings", [])
     )
@@ -441,14 +648,22 @@ def _build_graph(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
             node["evidence_count"] += 1
         return identifier
 
-    def add_edge(source: str | None, target: str | None, relationship: str) -> None:
+    def add_edge(
+        source: str | None,
+        target: str | None,
+        relationship: str,
+        *,
+        origin_path: bool = False,
+    ) -> None:
         if not source or not target or source == target:
             return
         key = (source, target, relationship)
-        edges.setdefault(
+        edge = edges.setdefault(
             key,
             {"source": source, "target": target, "relationship": relationship},
         )
+        if origin_path:
+            edge["origin_path"] = True
 
     def add_endpoint(value: Any, *, source: str) -> str | None:
         clean = str(value or "").strip()
@@ -625,6 +840,69 @@ def _build_graph(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
         if host_value and kind not in {"domain", "url"}:
             host_id = add_endpoint(host_value, source=source_name)
             add_edge(host_id, finding_id, "observed at")
+
+    trace = data.get("origin_trace", {})
+    if isinstance(trace, dict) and trace.get("origin_ip"):
+        origin_id = add_node(
+            "origin_candidate", trace["origin_ip"], source="origin-correlation"
+        )
+        if origin_id:
+            nodes[origin_id].update(
+                {
+                    "is_primary_origin": True,
+                    "origin_probability_percent": trace.get("probability_percent", 0),
+                    "confidence_band": trace.get("confidence_band", "inconclusive"),
+                    "classification": trace.get("classification", "inconclusive"),
+                    "probability_method": "heuristic_correlation_score_v1",
+                    "validation": trace.get("status_label", "Origin candidate"),
+                    "bypass_status": trace.get("status", "passive_correlation_only"),
+                }
+            )
+            previous = next(
+                (
+                    _graph_identifier("domain", value)
+                    for value in data.get("scope", {}).get("domains", [])
+                    if _graph_identifier("domain", value) in nodes
+                ),
+                None,
+            )
+            for step in trace.get("steps", []):
+                if not isinstance(step, dict):
+                    continue
+                stage_id = add_node(
+                    "origin_technique",
+                    f"{step.get('number', '-')}. {step.get('technique', 'Origin analysis')}",
+                    source="origin-methodology",
+                )
+                if not stage_id:
+                    continue
+                nodes[stage_id].update(
+                    {
+                        "stage_number": step.get("number"),
+                        "tactic": step.get("tactic", ""),
+                        "technique": step.get("technique", ""),
+                        "procedure": step.get("procedure", ""),
+                        "tools": step.get("tools", []),
+                        "stage_evidence": step.get("evidence", []),
+                        "validation": step.get("status", "unknown"),
+                        "is_origin_path": True,
+                    }
+                )
+                add_edge(
+                    previous,
+                    stage_id,
+                    str(step.get("relationship") or "origin methodology"),
+                    origin_path=True,
+                )
+                previous = stage_id
+            add_edge(
+                previous,
+                origin_id,
+                "validated origin path"
+                if trace.get("status") == "direct_path_validated"
+                else "leading origin candidate",
+                origin_path=True,
+            )
 
     serialized_nodes: list[dict[str, Any]] = []
     for node in nodes.values():
@@ -805,6 +1083,7 @@ def build_report_data(
         },
         "findings": [finding.to_dict() for finding in workspace.findings],
     }
+    data["origin_trace"] = _build_origin_trace(origin_discovery)
     data["subdomain_summary"] = build_subdomain_summary(data["findings"])
     data["key_findings"] = build_key_findings(data["findings"])
     data["graph"] = _build_graph(data)
@@ -1278,6 +1557,9 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
     styles.add(ParagraphStyle(name="Metric", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=18, leading=20, alignment=TA_CENTER, textColor=palette["blue"]))
     styles.add(ParagraphStyle(name="MetricLabel", parent=styles["BodySmall"], fontSize=7, leading=9, alignment=TA_CENTER, textColor=palette["muted"]))
     styles.add(ParagraphStyle(name="Warning", parent=styles["BodySmall"], fontName="Helvetica-Bold", textColor=palette["red"]))
+    styles.add(ParagraphStyle(name="AlertKicker", parent=styles["BodySmall"], fontName="Helvetica-Bold", fontSize=7.5, leading=9, textColor=palette["red"], spaceAfter=3))
+    styles.add(ParagraphStyle(name="AlertTitle", parent=styles["BodyText"], fontName="Helvetica-Bold", fontSize=13, leading=16, textColor=palette["navy"], spaceAfter=4))
+    styles.add(ParagraphStyle(name="AIBody", parent=styles["BodyText"], fontSize=9, leading=12, textColor=palette["navy"]))
 
     document = SimpleDocTemplate(
         str(path),
@@ -1440,10 +1722,81 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
             ("Classification", origin.get("classification", "inconclusive")),
         ):
             origin_rows.append([p(label), p(value)])
-        origin_story = [
-            Paragraph("Automatic Origin discovery", styles["Section"]),
-            Table(origin_rows, colWidths=[70 * mm, 95 * mm], repeatRows=1, style=table_style),
-        ]
+        origin_story = [Paragraph("Automatic Origin discovery", styles["Section"])]
+        trace = data.get("origin_trace", {})
+        if isinstance(trace, dict) and trace.get("origin_ip"):
+            alert_title = (
+                "HIGH-PRIORITY EXPOSURE - DIRECT ORIGIN PATH VALIDATED"
+                if trace.get("status") == "direct_path_validated"
+                else "ORIGIN ATTRIBUTION - VALIDATION STATUS REQUIRES REVIEW"
+            )
+            origin_alert = Table(
+                [[[
+                    Paragraph(_pdf_text(alert_title), styles["AlertKicker"]),
+                    Paragraph(
+                        _pdf_text(
+                            f"{trace.get('origin_ip')} behind {trace.get('cdn_waf_provider', 'the observed edge')}"
+                        ),
+                        styles["AlertTitle"],
+                    ),
+                    Paragraph(_pdf_text(trace.get("summary", "")), styles["BodySmall"]),
+                ]]],
+                colWidths=[165 * mm],
+                style=TableStyle(
+                    [
+                        (
+                            "BACKGROUND", (0, 0), (-1, -1),
+                            colors.HexColor("#FDE8EA")
+                            if trace.get("severity") == "critical"
+                            else colors.HexColor("#FFF4DF"),
+                        ),
+                        ("BOX", (0, 0), (-1, -1), 0.8, palette["red"] if trace.get("severity") == "critical" else palette["amber"]),
+                        ("LINEBEFORE", (0, 0), (0, 0), 4, palette["red"] if trace.get("severity") == "critical" else palette["amber"]),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                        ("TOPPADDING", (0, 0), (-1, -1), 9),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 9),
+                    ]
+                ),
+            )
+            origin_story.extend([origin_alert, Spacer(1, 3 * mm)])
+        origin_story.append(
+            Table(origin_rows, colWidths=[70 * mm, 95 * mm], repeatRows=1, style=table_style)
+        )
+        if isinstance(trace, dict) and trace.get("steps"):
+            trace_rows = [[
+                p("Step", "CellHead"), p("Tactic / technique", "CellHead"),
+                p("Procedure and evidence", "CellHead"), p("Status", "CellHead"),
+            ]]
+            for step in trace.get("steps", []):
+                if not isinstance(step, dict):
+                    continue
+                evidence = "; ".join(
+                    str(value) for value in step.get("evidence", [])[:4] if str(value).strip()
+                )
+                procedure = str(step.get("procedure") or "-")
+                if evidence:
+                    procedure += f" Evidence: {evidence}"
+                trace_rows.append(
+                    [
+                        p(step.get("number", "-")),
+                        p(f"{step.get('tactic', '-')} / {step.get('technique', '-')}"),
+                        p(procedure),
+                        p(step.get("status", "unknown")),
+                    ]
+                )
+            origin_story.extend(
+                [
+                    Paragraph("Origin attribution chain", styles["Section"]),
+                    LongTable(
+                        trace_rows,
+                        colWidths=[12 * mm, 43 * mm, 88 * mm, 22 * mm],
+                        repeatRows=1,
+                        style=table_style,
+                    ),
+                    Paragraph(_pdf_text(trace.get("qualification", "")), styles["Warning"]),
+                ]
+            )
         ranked_origin = origin.get("candidate_probabilities", [])
         if isinstance(ranked_origin, list) and ranked_origin:
             ranking_rows = [[p(value, "CellHead") for value in ("IP", "Probability", "Band", "Classification", "Sources")]]
@@ -1481,6 +1834,37 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
             Paragraph(_pdf_text(origin.get("warning", "")), styles["Warning"]),
         ])
 
+    ai_story: list[Any] = []
+    ai_assistance = data.get("ai_assistance", {})
+    narrative = ai_assistance.get("narrative", {}) if isinstance(ai_assistance, dict) else {}
+    if ai_assistance.get("status") == "generated" and isinstance(narrative, dict):
+        ai_story = [
+            PageBreak(),
+            Paragraph("AI-assisted executive brief", styles["ReportTitle"]),
+            Paragraph(
+                _pdf_text(
+                    f"Editorial model: {ai_assistance.get('model') or ai_assistance.get('model_requested', 'unknown')}. "
+                    "Evidence and scores remain deterministic."
+                ),
+                styles["Kicker"],
+            ),
+            Paragraph(_pdf_text(narrative.get("headline", "Executive assessment")), styles["Section"]),
+            Paragraph("Executive summary", styles["Section"]),
+            Paragraph(_pdf_text(narrative.get("executive_summary", "")), styles["AIBody"]),
+            Paragraph("Origin assessment", styles["Section"]),
+            Paragraph(_pdf_text(narrative.get("origin_assessment", "")), styles["AIBody"]),
+            Paragraph("Business impact", styles["Section"]),
+            Paragraph(_pdf_text(narrative.get("business_impact", "")), styles["AIBody"]),
+            Paragraph("Recommended actions", styles["Section"]),
+            *[
+                Paragraph(f"{index}. {_pdf_text(action)}", styles["AIBody"])
+                for index, action in enumerate(narrative.get("recommended_actions", []), start=1)
+            ],
+            Paragraph("Limitations", styles["Section"]),
+            Paragraph(_pdf_text(narrative.get("limitations", "")), styles["BodySmall"]),
+            Paragraph(_pdf_text(ai_assistance.get("notice", "")), styles["Warning"]),
+        ]
+
     story: list[Any] = [
         cover,
         Spacer(1, 5 * mm),
@@ -1488,6 +1872,7 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
         Paragraph("Executive key findings", styles["Section"]),
         LongTable(key_rows, colWidths=[48 * mm, 17 * mm, 100 * mm], repeatRows=1, style=key_style),
         *origin_story,
+        *ai_story,
         Paragraph("Authorized scope", styles["Section"]),
         Table(scope_rows, colWidths=[48 * mm, 117 * mm], repeatRows=1, style=table_style),
         Spacer(1, 3 * mm),
@@ -1741,8 +2126,24 @@ def export_reports(
     version: str,
     failures: list[str],
     txt_color: bool = True,
+    ai_config: AIReportConfig | None = None,
 ) -> list[Path]:
     data = build_report_data(workspace, target, version=version, failures=failures)
+    if ai_config is not None:
+        try:
+            data["ai_assistance"] = generate_ai_assistance(data, ai_config)
+        except (HttpError, ValueError) as exc:
+            data["ai_assistance"] = {
+                "status": "error",
+                "provider": "OpenRouter",
+                "model_requested": ai_config.model,
+                "error": str(exc),
+                "notice": (
+                    "The deterministic report was generated normally; the optional AI "
+                    "editorial pass was unavailable."
+                ),
+            }
+        workspace.write_json("ai/reporting-status.json", data["ai_assistance"])
     paths: list[Path] = []
     for report_format in formats:
         path = workspace.root / f"report.{report_format}"

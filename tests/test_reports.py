@@ -8,7 +8,7 @@ from pathlib import Path
 
 from cachaza.html_report import render_html
 from cachaza.models import Finding, TargetSpec
-from cachaza.reports import build_report_data
+from cachaza.reports import _build_origin_trace, build_report_data
 from cachaza.workspace import RunWorkspace
 
 
@@ -129,6 +129,148 @@ class InteractiveReportTests(unittest.TestCase):
             ("ip:203.0.113.9", "whois:203.0.113.9", "WHOIS record"),
             edges,
         )
+
+    def test_origin_trace_marks_validated_direct_path_and_graph_ttp_chain(self) -> None:
+        ranking = {
+            "status": "completed",
+            "mode": "balanced",
+            "origin_ip": "203.0.113.45",
+            "origin_probability_percent": 88,
+            "confidence_band": "high",
+            "classification": "high_confidence_origin",
+            "direct_requests_performed": 8,
+            "candidates_rejected_before_validation": 2,
+            "cdn_waf_detected": {
+                "provider": "Cloudflare",
+                "signals": ["cf-ray", "official range"],
+            },
+            "primary": [
+                {
+                    "ip": "203.0.113.45",
+                    "validation_status": "high_confidence_origin",
+                    "independent_source_families": [
+                        "virustotal",
+                        "urlscan",
+                        "direct_validation",
+                    ],
+                    "evidence": [
+                        {
+                            "code": "historical_apex_dns",
+                            "description": "Historical apex A record",
+                            "score": 30,
+                            "source": "virustotal",
+                            "source_family": "virustotal",
+                        },
+                        {
+                            "code": "same_certificate",
+                            "description": "Same certificate SHA-256",
+                            "score": 25,
+                            "source": "direct-origin-validation",
+                            "source_family": "direct_validation",
+                        },
+                    ],
+                }
+            ],
+        }
+        trace = _build_origin_trace(ranking)
+        self.assertEqual(trace["status"], "direct_path_validated")
+        self.assertIn("Same certificate SHA-256", trace["validation_signals"])
+        self.assertEqual(len(trace["steps"]), 5)
+
+        with tempfile.TemporaryDirectory() as temp:
+            workspace = RunWorkspace(Path(temp))
+            workspace.add(
+                Finding("input", "scope", "domain", "example.com", True, {"root": True})
+            )
+            workspace.add(
+                Finding(
+                    "origin",
+                    "origin-correlation",
+                    "origin_candidate",
+                    "203.0.113.45",
+                    False,
+                    {"root": "example.com", "origin_probability_percent": 88},
+                )
+            )
+            workspace.write_json("origin/final-ranking.json", ranking)
+            report = build_report_data(
+                workspace,
+                TargetSpec(domains=["example.com"]),
+                version="test",
+                failures=[],
+            )
+        primary = next(
+            node for node in report["graph"]["nodes"] if node.get("is_primary_origin")
+        )
+        self.assertEqual(primary["label"], "203.0.113.45")
+        self.assertEqual(
+            len(
+                [
+                    node
+                    for node in report["graph"]["nodes"]
+                    if node["kind"] == "origin_technique"
+                ]
+            ),
+            5,
+        )
+        self.assertEqual(
+            len([edge for edge in report["graph"]["edges"] if edge.get("origin_path")]),
+            6,
+        )
+        document = render_html(report)
+        self.assertIn("DIRECT ORIGIN PATH VALIDATED", document)
+        self.assertIn("How Cachaza reached this IP", document)
+        self.assertIn("Orange dashed relationships show the Origin attribution chain", document)
+
+    def test_origin_trace_does_not_claim_bypass_for_passive_only_evidence(self) -> None:
+        trace = _build_origin_trace(
+            {
+                "origin_ip": "203.0.113.45",
+                "origin_probability_percent": 72,
+                "confidence_band": "probable",
+                "classification": "probable_origin",
+                "direct_requests_performed": 0,
+                "primary": [
+                    {
+                        "ip": "203.0.113.45",
+                        "independent_source_families": ["virustotal", "urlscan"],
+                        "evidence": [],
+                    }
+                ],
+            }
+        )
+        self.assertEqual(trace["status"], "passive_correlation_only")
+        self.assertNotIn("validated as a directly reachable", trace["summary"])
+
+    def test_origin_trace_does_not_treat_negative_direct_evidence_as_bypass(self) -> None:
+        trace = _build_origin_trace(
+            {
+                "origin_ip": "203.0.113.45",
+                "origin_probability_percent": 70,
+                "confidence_band": "probable",
+                "classification": "probable_origin",
+                "direct_requests_performed": 4,
+                "primary": [
+                    {
+                        "ip": "203.0.113.45",
+                        "independent_source_families": [
+                            "virustotal",
+                            "direct_validation",
+                        ],
+                        "evidence": [
+                            {
+                                "code": "other_application",
+                                "description": "Content corresponds to a different application",
+                                "score": -30,
+                                "source": "direct-origin-validation",
+                                "source_family": "direct_validation",
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        self.assertEqual(trace["status"], "direct_validation_inconclusive")
 
     def test_html_contains_expandable_evidence_and_embedded_graph(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

@@ -14,6 +14,7 @@ from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from . import __version__
+from .ai_reporting import AIReportConfig, DEFAULT_OPENROUTER_MODEL
 from .console import Console
 from .credentials import load_credentials, temporary_harvester_home, temporary_subfinder_config
 from .cloud import RangeIndex
@@ -122,6 +123,11 @@ class RunOptions:
     allow_large_ranges: bool = False
     report_formats: list[str] = field(default_factory=lambda: ["json", "txt"])
     report_color: bool = True
+    ai_report: bool = False
+    ai_model: str = DEFAULT_OPENROUTER_MODEL
+    ai_language: str = "en"
+    ai_timeout: int = 60
+    ai_max_tokens: int = 1_400
     whois: bool = False
     wappalyzer: bool = False
     api_config: str | None = None
@@ -173,6 +179,11 @@ class Pipeline:
             "profile",
             "report_formats",
             "report_color",
+            "ai_report",
+            "ai_model",
+            "ai_language",
+            "ai_timeout",
+            "ai_max_tokens",
             "strict",
             "dry_run",
         ):
@@ -2505,6 +2516,15 @@ class Pipeline:
 
     def finalize(self) -> None:
         self.workspace.write_artifact_lists()
+        ai_config = None
+        if self.options.ai_report:
+            ai_config = AIReportConfig(
+                api_key=self.credentials.get("OPENROUTER_API_KEY", ""),
+                model=self.options.ai_model,
+                language=self.options.ai_language,
+                timeout=self.options.ai_timeout,
+                max_tokens=self.options.ai_max_tokens,
+            )
         export_reports(
             self.workspace,
             self.target,
@@ -2512,7 +2532,19 @@ class Pipeline:
             version=__version__,
             failures=self.failures,
             txt_color=self.options.report_color,
+            ai_config=ai_config,
         )
+        ai_status_path = self.workspace.rest / "ai" / "reporting-status.json"
+        if ai_status_path.is_file():
+            try:
+                ai_status = json.loads(ai_status_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                ai_status = {}
+            if ai_status.get("status") == "error":
+                self.console.warn(
+                    "OpenRouter editorial pass failed; deterministic reports were still "
+                    f"generated: {ai_status.get('error', 'unknown error')}"
+                )
         self.workspace.write_manifest(
             self.target,
             version=__version__,

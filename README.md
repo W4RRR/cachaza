@@ -534,11 +534,11 @@ Default runs write JSON and TXT reports. Use `-format all` for every supported f
 
 | Format | Content |
 |---|---|
-| HTML | Self-contained searchable evidence, Origin probability ranking, filters, expandable metadata, and relationship graph |
-| JSON | Lossless scope, Origin IP/probabilities, findings, graph, network intelligence, stages, and executive categories |
+| HTML | Executive Origin exposure alert, attribution chain, searchable evidence, filters, expandable metadata, and interactive relationship graph |
+| JSON | Lossless scope, Origin IP/probabilities, deterministic attribution trace, findings, graph, network intelligence, stages, and executive categories |
 | TXT | Terminal-friendly Origin IP/ranking, summary, inventory, stages, and evidence |
 | CSV | One normalized row per finding with spreadsheet formula-prefix neutralization |
-| PDF | Shareable summary with Origin probability chart/ranking, scope, infrastructure tables, stages, inventory, and bounded evidence appendix |
+| PDF | Board-ready summary with Origin exposure alert, attribution procedure, probability chart/ranking, scope, infrastructure, stages, and bounded evidence appendix |
 
 The terminal and TXT `KEY FINDINGS` summary keeps high-signal evidence readable:
 WAF products are grouped with one origin per line, actionable subdomains are split
@@ -548,7 +548,11 @@ candidates when manual validation is required.
 
 ### HTML relationship explorer
 
-The self-contained HTML report is one of Cachaza's primary analysis surfaces. Its interactive graph connects domains, ranked Origin candidates, URLs, IP addresses, networks, technologies, WAF observations, registrations, and evidence sources while preserving the scope and provenance of each node. Selecting an Origin node shows its probability, confidence band, classification and scoring method.
+The self-contained HTML report is one of Cachaza's primary analysis surfaces. Its interactive graph connects domains, the five-step Origin attribution procedure, ranked Origin candidates, URLs, IP addresses, networks, technologies, WAF observations, registrations, and evidence sources while preserving scope and provenance. The leading Origin IP is visually prioritized. Orange dashed edges show exactly how Cachaza moved from the public edge baseline through passive discovery, CDN/WAF exclusion, bounded scoring, and authorized direct validation. Selecting a procedure or Origin node shows its tactic, technique, tools, evidence, probability, confidence band, and classification.
+
+Cachaza only labels the result as a validated CDN/WAF boundary bypass when positive
+Direct-origin evidence exists. A passive-only correlation remains a likely candidate
+and is explicitly labeled as requiring validation.
 
 ![Cachaza HTML report relationship explorer](docs/assets/cachaza-html-report.png)
 
@@ -557,6 +561,31 @@ The self-contained HTML report is one of Cachaza's primary analysis surfaces. It
 ```bash
 cachaza run -d example.com -format all -o example-run
 ```
+
+### Optional OpenRouter executive narrative
+
+OpenRouter can provide a concise editorial layer for the final HTML/PDF while the
+normalized Cachaza evidence, Origin score, attribution chain, and tables remain the
+authoritative record. The integration is opt-in because a bounded report digest is
+sent to a third-party model provider. Raw findings, response bodies, credentials,
+and unbounded tool metadata are not included in that digest.
+
+```bash
+cp config/providers.example.env config/providers.env
+chmod 600 config/providers.env
+# Set OPENROUTER_API_KEY in config/providers.env, then:
+cachaza run -d example.com -origin-ip -origin-mode balanced -active -authorized \
+  -format html -format pdf -ai-report -ai-language es \
+  -ai-model '~openai/gpt-latest' -api-config config/providers.env -o executive-review
+```
+
+`-openrouter-report` and `-openrouter-model` are readable aliases. The API key is
+read from `OPENROUTER_API_KEY`; it is not accepted as a command-line value and is
+never embedded in `report.html`, `report.pdf`, JSON, the manifest, or command
+history. OpenRouter returns a strict structured narrative containing a headline,
+executive summary, Origin assessment, business impact, recommended actions, and
+limitations. If the provider is unavailable, deterministic reports are still
+written and `rest/ai/reporting-status.json` records the safe diagnostic.
 
 The resulting layout is:
 

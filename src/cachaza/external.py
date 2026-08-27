@@ -299,6 +299,7 @@ def doctor_rows(credentials: dict[str, str] | None = None) -> list[tuple[str, st
         ("SECURITYTRAILS_API_KEY", "optional"),
         ("DNSDB_API_KEY", "optional"),
         ("WHOISXML_API_KEY", "optional"),
+        ("OPENROUTER_API_KEY", "optional"),
     ):
         rows.append((name, "ok" if values.get(name, "").strip() else absent, "configuration (presence only)"))
     return rows
