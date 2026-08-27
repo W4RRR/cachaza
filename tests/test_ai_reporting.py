@@ -45,6 +45,21 @@ class AIReportingTests(unittest.TestCase):
                 "validation_signals": ["Same certificate"],
                 "steps": [],
             },
+            "origin_remediation": {
+                "actions": [
+                    {
+                        "priority": "P0",
+                        "phase": "Contain",
+                        "title": "Restrict ingress",
+                        "action": "Allow only the edge path.",
+                        "verification": "Direct external requests fail.",
+                    }
+                ]
+            },
+            "presentation": {
+                "mode": "professional",
+                "subject": "example.com",
+            },
         }
 
     def test_digest_excludes_raw_findings(self) -> None:
@@ -52,6 +67,9 @@ class AIReportingTests(unittest.TestCase):
         serialized = json.dumps(digest)
         self.assertNotIn("raw-secret-material", serialized)
         self.assertNotIn("findings", digest)
+        self.assertEqual(digest["report_subject"], "example.com")
+        self.assertTrue(digest["professional_white_label"])
+        self.assertEqual(digest["origin_remediation"][0]["priority"], "P0")
 
     def test_openrouter_generates_validated_structured_narrative(self) -> None:
         narrative = {
@@ -80,6 +98,8 @@ class AIReportingTests(unittest.TestCase):
         self.assertTrue(
             kwargs["json_body"]["provider"]["require_parameters"]
         )
+        self.assertIn("origin_remediation", serialized_payload)
+        self.assertIn("do not name the underlying collection product", serialized_payload)
 
     def test_invalid_openrouter_response_is_rejected(self) -> None:
         with patch(
@@ -92,4 +112,3 @@ class AIReportingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

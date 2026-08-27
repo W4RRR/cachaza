@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import copy
 import ipaddress
 import io
 import json
@@ -590,6 +591,107 @@ def _build_origin_trace(origin: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _build_origin_remediation(trace: dict[str, Any]) -> dict[str, Any]:
+    """Return a vendor-neutral, verifiable plan for closing Origin exposure."""
+
+    if not isinstance(trace, dict) or not trace.get("origin_ip"):
+        return {}
+    exposed = trace.get("status") == "direct_path_validated"
+    provider = str(trace.get("cdn_waf_provider") or "the CDN/WAF provider")
+    origin_ip = str(trace.get("origin_ip"))
+    posture = "urgent" if exposed else "precautionary"
+    actions = [
+        {
+            "priority": "P0" if exposed else "P1",
+            "phase": "Contain",
+            "title": "Restrict public ingress to the Origin",
+            "action": (
+                f"Allow application ports on {origin_ip} only from the current official "
+                f"egress ranges or authenticated private connectivity used by {provider}; "
+                "deny every other Internet source at the cloud security group and host firewall."
+            ),
+            "owner": "Network / cloud operations",
+            "verification": (
+                "A direct connection to the IP with the production Host header and TLS SNI "
+                "must time out, be refused, or return a deliberate deny response from every "
+                "non-CDN test network."
+            ),
+        },
+        {
+            "priority": "P0" if exposed else "P1",
+            "phase": "Authenticate",
+            "title": "Require an authenticated edge-to-Origin path",
+            "action": (
+                "Enable authenticated Origin pulls, mutual TLS, a private tunnel, or an "
+                "equivalent cryptographic control so source-IP allowlisting is not the only gate."
+            ),
+            "owner": "Platform engineering",
+            "verification": (
+                "Requests that preserve the production hostname but lack the edge credential "
+                "must fail before reaching the application."
+            ),
+        },
+        {
+            "priority": "P1",
+            "phase": "Remove exposure paths",
+            "title": "Eliminate records that disclose or reach the Origin",
+            "action": (
+                "Proxy every public web hostname, remove stale or unproxied A/AAAA records, "
+                "close alternate web ports, and review historical environment, staging, mail, "
+                "certificate and scan-index correlations that point to the same address."
+            ),
+            "owner": "DNS / application owners",
+            "verification": (
+                "Current DNS and service inventories must expose only approved edge addresses; "
+                "no alternate hostname or port may serve the production application directly."
+            ),
+        },
+        {
+            "priority": "P1",
+            "phase": "Rotate and harden",
+            "title": "Rotate the address after controls are effective",
+            "action": (
+                "If operationally possible, move the Origin to a new address only after ingress "
+                "controls are active. Configure default virtual hosts to deny unknown Host/SNI "
+                "values and minimize identifying banners."
+            ),
+            "owner": "Infrastructure / application security",
+            "verification": (
+                "The retired address must no longer expose the service, and the replacement "
+                "address must be unreachable outside the authenticated edge path."
+            ),
+        },
+        {
+            "priority": "P2",
+            "phase": "Retest and monitor",
+            "title": "Prove closure and detect regression",
+            "action": (
+                "Repeat the same Host/SNI direct-origin validation from an external network, "
+                "cover all discovered ports, and alert on denied direct requests or DNS changes."
+            ),
+            "owner": "Security operations",
+            "verification": (
+                "Document a failed direct-path retest, retain firewall evidence, and schedule "
+                "continuous DNS and exposure monitoring."
+            ),
+        },
+    ]
+    return {
+        "posture": posture,
+        "title": "Origin exposure remediation plan",
+        "objective": (
+            "Make the application reachable only through the approved CDN/WAF path and remove "
+            "the infrastructure signals that make direct-Origin rediscovery actionable."
+        ),
+        "context": (
+            "The first control is reachability, not secrecy: historical intelligence can retain "
+            "an old address indefinitely, so rotating an IP without enforcing ingress controls "
+            "does not resolve the exposure."
+        ),
+        "actions": actions,
+    }
+
+
 def _build_graph(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     """Build a relationship graph from finding metadata and normalized values."""
     nodes: dict[str, dict[str, Any]] = {}
@@ -1084,6 +1186,7 @@ def build_report_data(
         "findings": [finding.to_dict() for finding in workspace.findings],
     }
     data["origin_trace"] = _build_origin_trace(origin_discovery)
+    data["origin_remediation"] = _build_origin_remediation(data["origin_trace"])
     data["subdomain_summary"] = build_subdomain_summary(data["findings"])
     data["key_findings"] = build_key_findings(data["findings"])
     data["graph"] = _build_graph(data)
@@ -1533,6 +1636,17 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
     except ImportError as exc:  # pragma: no cover - packaging installs this dependency
         raise RuntimeError("PDF output requires reportlab; reinstall Cachaza with pipx install --force .") from exc
 
+    presentation = data.get("presentation", {})
+    professional = bool(
+        isinstance(presentation, dict) and presentation.get("mode") == "professional"
+    )
+    report_title = str(
+        presentation.get("title") if isinstance(presentation, dict) else ""
+    ) or ("Professional Recon Report" if professional else "Cachaza")
+    report_subject = str(
+        presentation.get("subject") if isinstance(presentation, dict) else ""
+    ) or ", ".join(data.get("scope", {}).get("domains", [])) or "authorized scope"
+
     palette = {
         "navy": colors.HexColor("#0B1E33"),
         "blue": colors.HexColor("#246BCE"),
@@ -1568,8 +1682,8 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
         leftMargin=16 * mm,
         topMargin=18 * mm,
         bottomMargin=17 * mm,
-        title="Cachaza reconnaissance report",
-        author="Cachaza",
+        title=f"{report_title} - {report_subject}",
+        author=report_title,
     )
 
     def page(canvas: Any, doc: Any) -> None:
@@ -1580,7 +1694,12 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
         canvas.line(16 * mm, 12 * mm, A4[0] - 16 * mm, 12 * mm)
         canvas.setFont("Helvetica", 7)
         canvas.setFillColor(palette["muted"])
-        canvas.drawString(16 * mm, 8 * mm, "Cachaza - passive-first reconnaissance")
+        footer = (
+            f"Professional Recon Report - {report_subject}"
+            if professional
+            else "Cachaza - passive-first reconnaissance"
+        )
+        canvas.drawString(16 * mm, 8 * mm, footer[:92])
         canvas.drawRightString(A4[0] - 16 * mm, 8 * mm, f"Page {doc.page}")
         canvas.restoreState()
 
@@ -1625,12 +1744,20 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
         ]
     )
     domains = ", ".join(data["scope"].get("domains", [])) or "No domains supplied"
+    cover_kicker = (
+        "EXECUTIVE RECONNAISSANCE &amp; ORIGIN EXPOSURE ASSESSMENT"
+        if professional
+        else "PASSIVE-FIRST OSINT &amp; AUTHORIZED RECONNAISSANCE"
+    )
     cover = Table(
         [[
             [
-                Paragraph("PASSIVE-FIRST OSINT &amp; AUTHORIZED RECONNAISSANCE", styles["CoverBody"]),
-                Paragraph("Cachaza", styles["CoverTitle"]),
-                Paragraph(_pdf_text(domains), styles["CoverBody"]),
+                Paragraph(cover_kicker, styles["CoverBody"]),
+                Paragraph(_pdf_text(report_title), styles["CoverTitle"]),
+                Paragraph(
+                    _pdf_text(f"Prepared for {report_subject}" if professional else domains),
+                    styles["CoverBody"],
+                ),
             ],
             [
                 Paragraph(f"<b>VERSION</b><br/>{_pdf_text(data['version'])}", styles["CoverBody"]),
@@ -1824,6 +1951,45 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
                     LongTable(
                         ranking_rows,
                         colWidths=[39 * mm, 22 * mm, 22 * mm, 39 * mm, 43 * mm],
+                        repeatRows=1,
+                        style=table_style,
+                    ),
+                ]
+            )
+        remediation = data.get("origin_remediation", {})
+        if isinstance(remediation, dict) and remediation.get("actions"):
+            remediation_rows = [
+                [
+                    p("Priority", "CellHead"),
+                    p("Control and implementation", "CellHead"),
+                    p("Owner", "CellHead"),
+                    p("Closure test", "CellHead"),
+                ]
+            ]
+            for item in remediation.get("actions", []):
+                if not isinstance(item, dict):
+                    continue
+                remediation_rows.append(
+                    [
+                        p(item.get("priority", "-")),
+                        p(
+                            f"{item.get('phase', 'Remediate')} - {item.get('title', '')}. "
+                            f"{item.get('action', '')}"
+                        ),
+                        p(item.get("owner", "-")),
+                        p(item.get("verification", "-")),
+                    ]
+                )
+            origin_story.extend(
+                [
+                    PageBreak(),
+                    Paragraph("How to remediate the Origin exposure", styles["ReportTitle"]),
+                    Paragraph(_pdf_text(remediation.get("objective", "")), styles["AIBody"]),
+                    Paragraph(_pdf_text(remediation.get("context", "")), styles["Warning"]),
+                    Spacer(1, 2 * mm),
+                    LongTable(
+                        remediation_rows,
+                        colWidths=[14 * mm, 70 * mm, 29 * mm, 52 * mm],
                         repeatRows=1,
                         style=table_style,
                     ),
@@ -2109,13 +2275,54 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
             Paragraph(
                 _pdf_text(
                     "Full per-finding provenance and metadata are preserved in report.json and rest/findings.jsonl. "
-                    f"Generated {data['generated_at']} with Cachaza {data['version']}."
+                    + (
+                        f"Prepared for {report_subject}; generated {data['generated_at']}."
+                        if professional
+                        else f"Generated {data['generated_at']} with Cachaza {data['version']}."
+                    )
                 ),
                 styles["BodySmall"],
             ),
         ]
     )
     document.build(story, onFirstPage=page, onLaterPages=page)
+
+
+def _presentation(target: TargetSpec, *, professional: bool) -> dict[str, Any]:
+    subject_values = target.domains or target.asns or target.cidrs or target.organizations
+    subject = ", ".join(subject_values) if subject_values else "authorized scope"
+    return {
+        "mode": "professional" if professional else "standard",
+        "title": "Professional Recon Report" if professional else "Cachaza",
+        "subject": subject,
+        "white_label": professional,
+    }
+
+
+def _white_label_report_data(value: Any) -> Any:
+    """Remove product branding from every professional-mode report value."""
+
+    if isinstance(value, dict):
+        return {key: _white_label_report_data(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_white_label_report_data(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_white_label_report_data(item) for item in value)
+    if not isinstance(value, str):
+        return value
+    if value.casefold() == "cachaza":
+        return "professional-recon-report"
+    replacements = (
+        (r"Cachaza Direct-origin validator", "Direct-origin validator"),
+        (r"Cachaza reporting engine", "Reporting engine"),
+        (r"Cachaza's normalized evidence", "The report's normalized evidence"),
+        (r"deterministic Cachaza report", "deterministic reconnaissance report"),
+        (r"\bCachaza\b", "recon workflow"),
+    )
+    rendered = value
+    for pattern, replacement in replacements:
+        rendered = re.sub(pattern, replacement, rendered, flags=re.IGNORECASE)
+    return rendered
 
 
 def export_reports(
@@ -2127,8 +2334,10 @@ def export_reports(
     failures: list[str],
     txt_color: bool = True,
     ai_config: AIReportConfig | None = None,
+    professional_report: bool = False,
 ) -> list[Path]:
     data = build_report_data(workspace, target, version=version, failures=failures)
+    data["presentation"] = _presentation(target, professional=professional_report)
     if ai_config is not None:
         try:
             data["ai_assistance"] = generate_ai_assistance(data, ai_config)
@@ -2143,6 +2352,9 @@ def export_reports(
                     "editorial pass was unavailable."
                 ),
             }
+    if professional_report:
+        data = _white_label_report_data(copy.deepcopy(data))
+    if ai_config is not None:
         workspace.write_json("ai/reporting-status.json", data["ai_assistance"])
     paths: list[Path] = []
     for report_format in formats:

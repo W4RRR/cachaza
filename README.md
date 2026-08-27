@@ -23,7 +23,7 @@ _________     _____  _________   ___ ___    _____  __________  _____
  \______  /\____|__  /\______  /\___|_  /\____|__  /_______ \____|__  /
         \/         \/        \/       \/         \/        \/       \/
                    github.com/W4RRR/cachaza by W4RRR
-                                 v1.0.0
+                                 v1.0.2
 ```
 
 Cachaza turns an explicitly defined domain or network scope into a reproducible reconnaissance workspace. It collects passive intelligence first, applies scope decisions to every observation, and requires explicit authorization before direct-contact stages run.
@@ -587,6 +587,39 @@ executive summary, Origin assessment, business impact, recommended actions, and
 limitations. If the provider is unavailable, deterministic reports are still
 written and `rest/ai/reporting-status.json` records the safe diagnostic.
 
+### Professional white-label mode (`-op`)
+
+`-op` (alias: `-professional-report`) is the one-step executive mode. It enables
+the OpenRouter editorial pass, automatically adds HTML and PDF to the requested
+formats, and renders a fully responsive white-label presentation headed
+`Professional Recon Report`. The assessed domain is shown explicitly as the report
+subject (for example, `Report prepared for example.com`). Generated professional
+reports remove the Cachaza product name from visible content, document metadata,
+embedded HTML data, and structured report output.
+
+The professional HTML adapts from widescreen committee displays to tablets and
+Android/iOS phone widths without external assets. Both HTML and PDF include a
+vendor-neutral Origin remediation roadmap covering ingress restriction,
+authenticated edge-to-Origin transport, disclosure-path cleanup, address rotation,
+default Host/SNI denial, external retesting, and regression monitoring. OpenRouter
+may improve the executive wording, but the controls and closure tests are supplied
+deterministically by the application.
+
+```bash
+mkdir -p "$HOME/.config/cachaza"
+test -f "$HOME/.config/cachaza/providers.env" || \
+  cp config/providers.example.env "$HOME/.config/cachaza/providers.env"
+chmod 600 "$HOME/.config/cachaza/providers.env"
+# Set OPENROUTER_API_KEY, then:
+cachaza run -d example.com -origin-ip -origin-mode deep -active -authorized \
+  -op -ai-language es -api-config "$HOME/.config/cachaza/providers.env" \
+  -o professional-example
+```
+
+`-op` requires `OPENROUTER_API_KEY` to be present. A provider outage does not block
+the deterministic professional HTML/PDF; the failure is recorded safely in
+`rest/ai/reporting-status.json`.
+
 The resulting layout is:
 
 ```text
@@ -703,14 +736,14 @@ cachaza -update
 
 Both commands are equivalent.
 
-An existing v0.10.7 installation already updates from `main`. Once v1.0.0 has been merged into `main` and the `v1.0.0` Release has been published from that same commit, the normal upgrade is therefore:
+Once v1.0.2 has been merged into `main` and the `v1.0.2` Release has been published from that same commit, the normal upgrade is:
 
 ```bash
 cachaza -up
 cachaza -version
 ```
 
-The second command must print `cachaza 1.0.0`.
+The second command must print `cachaza 1.0.2`.
 
 ### Publishing a GitHub Release
 
@@ -721,8 +754,8 @@ Create the tag only after the release pull request has been merged into `main`:
 ```bash
 git switch main
 git pull --ff-only origin main
-git tag -a v1.0.0 -m "Cachaza v1.0.0"
-git push origin v1.0.0
+git tag -a v1.0.2 -m "Cachaza v1.0.2"
+git push origin v1.0.2
 ```
 
 The Release must be public—not a draft or prerelease—so `/releases/latest` and `cachaza -up` can discover it.

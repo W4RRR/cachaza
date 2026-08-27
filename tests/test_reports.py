@@ -222,6 +222,20 @@ class InteractiveReportTests(unittest.TestCase):
         self.assertIn("How Cachaza reached this IP", document)
         self.assertIn("Orange dashed relationships show the Origin attribution chain", document)
 
+        report["presentation"] = {
+            "mode": "professional",
+            "title": "Professional Recon Report",
+            "subject": "example.com",
+            "white_label": True,
+        }
+        professional = render_html(report)
+        self.assertIn("Professional Recon Report", professional)
+        self.assertIn("Report prepared for <strong>example.com</strong>", professional)
+        self.assertIn("How the assessment reached this IP", professional)
+        self.assertIn("How to remediate the Origin exposure", professional)
+        self.assertIn("Restrict public ingress to the Origin", professional)
+        self.assertNotIn("cachaza", professional.casefold())
+
     def test_origin_trace_does_not_claim_bypass_for_passive_only_evidence(self) -> None:
         trace = _build_origin_trace(
             {

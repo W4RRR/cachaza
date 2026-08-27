@@ -81,6 +81,61 @@ class CliTests(unittest.TestCase):
                 {"report.json", "report.txt", "rest"},
             )
 
+    def test_op_generates_white_label_html_pdf_and_uses_openrouter(self) -> None:
+        narrative = {
+            "headline": "Executive exposure assessment",
+            "executive_summary": "Evidence-backed summary for leadership.",
+            "origin_assessment": "No direct-path claim without validation.",
+            "business_impact": "The edge boundary should remain the only public path.",
+            "recommended_actions": [
+                "Restrict ingress",
+                "Authenticate the edge path",
+                "Retest externally",
+            ],
+            "limitations": "Attribution does not prove ownership.",
+        }
+        assistance = {
+            "status": "generated",
+            "provider": "OpenRouter",
+            "model": "openai/test-model",
+            "narrative": narrative,
+            "notice": "AI prose is editorial; deterministic evidence remains authoritative.",
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "professional"
+            credentials = Path(temp) / "providers.env"
+            credentials.write_text("OPENROUTER_API_KEY=test-key\n", encoding="utf-8")
+            with patch(
+                "cachaza.reports.generate_ai_assistance", return_value=assistance
+            ) as generated:
+                code = main(
+                    [
+                        "run",
+                        "-d",
+                        "example.com",
+                        "-dry-run",
+                        "-stages",
+                        "asn",
+                        "-op",
+                        "-api-config",
+                        str(credentials),
+                        "-o",
+                        str(root),
+                        "-silent",
+                    ]
+                )
+            self.assertEqual(code, 0)
+            generated.assert_called_once()
+            self.assertTrue((root / "report.html").is_file())
+            self.assertTrue((root / "report.pdf").is_file())
+            html = (root / "report.html").read_text(encoding="utf-8")
+            self.assertIn("Professional Recon Report", html)
+            self.assertIn("Report prepared for <strong>example.com</strong>", html)
+            self.assertNotIn("cachaza", html.casefold())
+            report = json.loads((root / "report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["presentation"]["mode"], "professional")
+            self.assertEqual(report["tool"], "professional-recon-report")
+
     def test_normalize_command(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             source = Path(temp) / "input.txt"
@@ -199,6 +254,8 @@ class CliTests(unittest.TestCase):
         self.assertIn("-resume", run_help)
         self.assertIn("-profile {passive,safe,full}", run_help)
         self.assertIn("passive  Default passive OSINT", run_help)
+        self.assertIn("-op", run_help)
+        self.assertIn("Professional Recon Report", run_help)
 
     def test_final_output_recommends_opening_html_report(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

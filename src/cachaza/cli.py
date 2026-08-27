@@ -298,6 +298,16 @@ its findings. Direct probes must be explicitly authorized with -active.""",
     run.add_argument("-api-config", help="optional KEY=value credential file parsed as data, never executed")
     ai = run.add_argument_group("AI-assisted reporting (OpenRouter)")
     ai.add_argument(
+        "-op",
+        "-professional-report",
+        dest="professional_report",
+        action="store_true",
+        help=(
+            "generate white-label Professional Recon Report HTML/PDF and enable the "
+            "OpenRouter editorial pass; implies -ai-report and adds html,pdf formats"
+        ),
+    )
+    ai.add_argument(
         "-ai-report", "-openrouter-report", dest="ai_report", action="store_true",
         help=(
             "opt in to an OpenRouter editorial pass for executive HTML/PDF prose; "
@@ -708,14 +718,14 @@ def _validate_run_args(args: argparse.Namespace, target: TargetSpec) -> None:
         raise ValidationError("-ai-max-tokens must be between 500 and 3000")
     if not re.fullmatch(r"[A-Za-z0-9._~:/-]{2,160}", args.ai_model):
         raise ValidationError("-ai-model must be a valid OpenRouter model slug")
-    if args.ai_report:
+    if args.ai_report or args.professional_report:
         try:
             credentials = load_credentials(args.api_config)
         except FileNotFoundError as exc:
             raise ValidationError(str(exc)) from exc
         if not credentials.get("OPENROUTER_API_KEY", "").strip():
             raise ValidationError(
-                "-ai-report requires OPENROUTER_API_KEY in the environment or -api-config file"
+                "-op/-ai-report requires OPENROUTER_API_KEY in the environment or -api-config file"
             )
     active_without_gate = sorted(set(requested_stages) & ACTIVE_STAGES) if not args.active else []
     if active_without_gate:
@@ -803,6 +813,12 @@ def command_run(args: argparse.Namespace, console: Console) -> int:
         raise ValidationError(f"unknown stages: {', '.join(sorted(unknown_stages))}")
     providers = [] if args.cloud_providers.strip().lower() == "none" else _csv(args.cloud_providers)
     report_formats = _report_formats(args.report_formats)
+    if args.professional_report:
+        report_formats = [
+            value
+            for value in REPORT_FORMATS
+            if value in set(report_formats) | {"html", "pdf"}
+        ]
     active_tools = _csv(args.active_tools)
     allowed_active = {"httpx", "naabu", "caduceus", "nmap"}
     if set(active_tools) - allowed_active:
@@ -852,7 +868,8 @@ def command_run(args: argparse.Namespace, console: Console) -> int:
         allow_large_ranges=args.allow_large_ranges,
         report_formats=report_formats,
         report_color=not args.no_color,
-        ai_report=args.ai_report,
+        ai_report=args.ai_report or args.professional_report,
+        professional_report=args.professional_report,
         ai_model=args.ai_model,
         ai_language=args.ai_language,
         ai_timeout=args.ai_timeout,

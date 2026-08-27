@@ -124,6 +124,7 @@ class RunOptions:
     report_formats: list[str] = field(default_factory=lambda: ["json", "txt"])
     report_color: bool = True
     ai_report: bool = False
+    professional_report: bool = False
     ai_model: str = DEFAULT_OPENROUTER_MODEL
     ai_language: str = "en"
     ai_timeout: int = 60
@@ -180,6 +181,7 @@ class Pipeline:
             "report_formats",
             "report_color",
             "ai_report",
+            "professional_report",
             "ai_model",
             "ai_language",
             "ai_timeout",
@@ -2533,6 +2535,7 @@ class Pipeline:
             failures=self.failures,
             txt_color=self.options.report_color,
             ai_config=ai_config,
+            professional_report=self.options.professional_report,
         )
         ai_status_path = self.workspace.rest / "ai" / "reporting-status.json"
         if ai_status_path.is_file():

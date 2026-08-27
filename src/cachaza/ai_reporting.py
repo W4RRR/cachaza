@@ -74,10 +74,19 @@ def build_report_digest(data: dict[str, Any]) -> dict[str, Any]:
     key_findings = data.get("key_findings", {})
     origin = data.get("origin_discovery", {})
     trace = data.get("origin_trace", {})
+    remediation = data.get("origin_remediation", {})
+    presentation = data.get("presentation", {})
     return {
         "tool": data.get("tool", "cachaza"),
         "version": data.get("version", "unknown"),
         "generated_at": data.get("generated_at", ""),
+        "report_subject": presentation.get("subject", "")
+        if isinstance(presentation, dict)
+        else "",
+        "professional_white_label": bool(
+            isinstance(presentation, dict)
+            and presentation.get("mode") == "professional"
+        ),
         "scope": data.get("scope", {}),
         "counts": data.get("counts", {}),
         "run_issue_count": len(data.get("issues", [])),
@@ -119,6 +128,21 @@ def build_report_digest(data: dict[str, Any]) -> dict[str, Any]:
                 if isinstance(step, dict)
             ],
         },
+        "origin_remediation": [
+            {
+                "priority": item.get("priority", ""),
+                "phase": item.get("phase", ""),
+                "title": item.get("title", ""),
+                "action": item.get("action", ""),
+                "verification": item.get("verification", ""),
+            }
+            for item in (
+                remediation.get("actions", [])[:6]
+                if isinstance(remediation, dict)
+                else []
+            )
+            if isinstance(item, dict)
+        ],
     }
 
 
@@ -164,7 +188,11 @@ def generate_ai_assistance(
                     "tools, validation, ownership, impact, or certainty. Preserve the distinction "
                     "between heuristic correlation and proof. If attribution_status is not "
                     "direct_path_validated, do not claim that the CDN/WAF was bypassed. Keep the "
-                    "tone concise, neutral, and decision-oriented. Return only the requested JSON."
+                    "tone concise, neutral, and decision-oriented. Recommended actions must "
+                    "prioritize the supplied origin_remediation controls and closure tests; do "
+                    "not invent vendor features or claim that an unverified fix is complete. If "
+                    "professional_white_label is true, do not name the underlying collection "
+                    "product in the narrative. Return only the requested JSON."
                 ),
             },
             {
