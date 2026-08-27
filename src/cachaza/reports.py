@@ -1617,7 +1617,7 @@ def _pdf_text(value: Any) -> str:
 
 def _write_pdf(path: Path, data: dict[str, Any]) -> None:
     try:
-        from reportlab.graphics.shapes import Drawing, Rect, String
+        from reportlab.graphics.shapes import Drawing, Line, Polygon, Rect, String
         from reportlab.lib import colors
         from reportlab.lib.enums import TA_CENTER, TA_RIGHT
         from reportlab.lib.pagesizes import A4
@@ -1728,6 +1728,223 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
                 color = palette["green"] if item.get("eligible_origin") else palette["amber"]
                 drawing.add(Rect(label_width, y, bar_width * probability / 100, 4.2 * mm, rx=2 * mm, ry=2 * mm, fillColor=color, strokeColor=None))
             drawing.add(String(label_width + bar_width + 3 * mm, y + 1.2 * mm, f"{probability}%", fontName="Helvetica-Bold", fontSize=7, fillColor=palette["navy"]))
+        return drawing
+
+    def origin_path_diagram(trace: dict[str, Any]) -> Any:
+        """Render the deterministic Origin attribution chain as a compact PDF graph."""
+
+        steps = [
+            item for item in trace.get("steps", []) if isinstance(item, dict)
+        ][:5]
+        compact_titles = [
+            "Public edge baseline",
+            "Passive Origin correlation",
+            "CDN/WAF exclusion and scoring",
+            "Direct-origin HTTP/TLS validation",
+            "Evidence-backed classification",
+        ]
+        compact_relationships = [
+            "baseline",
+            "discovery",
+            "edge exclusion",
+            "direct validation",
+            "attribution",
+        ]
+        chart_width = 165 * mm
+        chart_height = 72 * mm
+        node_width = 45 * mm
+        node_height = 25 * mm
+        top_y = 43 * mm
+        bottom_y = 4 * mm
+        drawing = Drawing(chart_width, chart_height)
+
+        def short_lines(value: Any, *, width: int = 23) -> list[str]:
+            words = str(value or "-").split()
+            lines: list[str] = []
+            current = ""
+            for word in words:
+                candidate = f"{current} {word}".strip()
+                if current and len(candidate) > width:
+                    lines.append(current)
+                    current = word
+                else:
+                    current = candidate
+                if len(lines) == 2:
+                    break
+            if current and len(lines) < 2:
+                lines.append(current)
+            if len(lines) == 2 and len(" ".join(words)) > len(" ".join(lines)):
+                lines[-1] = lines[-1][: max(1, width - 3)].rstrip() + "..."
+            return lines or ["-"]
+
+        def node(
+            x: float,
+            y: float,
+            *,
+            kicker: str,
+            title: Any,
+            status: Any,
+            outcome: bool = False,
+        ) -> None:
+            critical = outcome and trace.get("status") == "direct_path_validated"
+            fill = (
+                colors.HexColor("#FDE8EA") if critical
+                else colors.HexColor("#FFF4DF") if outcome
+                else colors.white
+            )
+            stroke = palette["red"] if critical else palette["amber"] if outcome else palette["blue"]
+            drawing.add(
+                Rect(
+                    x,
+                    y,
+                    node_width,
+                    node_height,
+                    rx=3 * mm,
+                    ry=3 * mm,
+                    fillColor=fill,
+                    strokeColor=stroke,
+                    strokeWidth=1.2,
+                )
+            )
+            drawing.add(
+                Rect(
+                    x,
+                    y + node_height - 2.2 * mm,
+                    node_width,
+                    2.2 * mm,
+                    rx=1.1 * mm,
+                    ry=1.1 * mm,
+                    fillColor=stroke,
+                    strokeColor=None,
+                )
+            )
+            drawing.add(
+                String(
+                    x + 3.2 * mm,
+                    y + 19.2 * mm,
+                    kicker.upper()[:34],
+                    fontName="Helvetica-Bold",
+                    fontSize=5.2,
+                    fillColor=stroke,
+                )
+            )
+            title_lines = short_lines(title, width=26 if outcome else 23)
+            for index, line in enumerate(title_lines):
+                drawing.add(
+                    String(
+                        x + 3.2 * mm,
+                        y + (13.7 - index * 4.2) * mm,
+                        line,
+                        fontName="Helvetica-Bold",
+                        fontSize=8 if outcome else 6.6,
+                        fillColor=palette["navy"],
+                    )
+                )
+            drawing.add(
+                String(
+                    x + 3.2 * mm,
+                    y + 3.2 * mm,
+                    str(status or "unknown")[:38],
+                    fontName="Helvetica",
+                    fontSize=5.2,
+                    fillColor=palette["muted"],
+                )
+            )
+
+        def arrow(
+            x1: float,
+            y1: float,
+            x2: float,
+            y2: float,
+            label: Any,
+        ) -> None:
+            color = palette["amber"]
+            drawing.add(Line(x1, y1, x2, y2, strokeColor=color, strokeWidth=1.4))
+            if abs(x2 - x1) >= abs(y2 - y1):
+                direction = 1 if x2 > x1 else -1
+                points = [
+                    x2,
+                    y2,
+                    x2 - direction * 2.4 * mm,
+                    y2 + 1.5 * mm,
+                    x2 - direction * 2.4 * mm,
+                    y2 - 1.5 * mm,
+                ]
+                label_x = (x1 + x2) / 2
+                label_y = y1 + 2.4 * mm
+            else:
+                direction = 1 if y2 > y1 else -1
+                points = [
+                    x2,
+                    y2,
+                    x2 + 1.5 * mm,
+                    y2 - direction * 2.4 * mm,
+                    x2 - 1.5 * mm,
+                    y2 - direction * 2.4 * mm,
+                ]
+                label_x = x1 - 2 * mm
+                label_y = (y1 + y2) / 2
+            drawing.add(Polygon(points, fillColor=color, strokeColor=None))
+            drawing.add(
+                String(
+                    label_x,
+                    label_y,
+                    str(label or "correlates")[:20],
+                    fontName="Helvetica",
+                    fontSize=4.5,
+                    textAnchor="middle",
+                    fillColor=palette["muted"],
+                )
+            )
+
+        if len(steps) < 5:
+            return drawing
+        x_positions = [0 * mm, 60 * mm, 120 * mm]
+        for index in range(3):
+            step = steps[index]
+            node(
+                x_positions[index],
+                top_y,
+                kicker=f"Step {step.get('number', index + 1)}",
+                title=compact_titles[index],
+                status=step.get("status", "unknown"),
+            )
+        node(
+            x_positions[2],
+            bottom_y,
+            kicker=f"Step {steps[3].get('number', 4)}",
+            title=compact_titles[3],
+            status=steps[3].get("status", "unknown"),
+        )
+        node(
+            x_positions[1],
+            bottom_y,
+            kicker=f"Step {steps[4].get('number', 5)}",
+            title=compact_titles[4],
+            status=steps[4].get("status", "unknown"),
+        )
+        node(
+            x_positions[0],
+            bottom_y,
+            kicker="Leading Origin IP",
+            title=trace.get("origin_ip", "Not identified"),
+            status=(
+                f"{trace.get('probability_percent', 0)}% - "
+                + (
+                    "validated bypass"
+                    if trace.get("status") == "direct_path_validated"
+                    else "evidence correlation"
+                )
+            ),
+            outcome=True,
+        )
+        center_top = top_y + node_height / 2
+        center_bottom = bottom_y + node_height / 2
+        arrow(45 * mm, center_top, 60 * mm, center_top, compact_relationships[0])
+        arrow(105 * mm, center_top, 120 * mm, center_top, compact_relationships[1])
+        arrow(142.5 * mm, top_y, 142.5 * mm, bottom_y + node_height, compact_relationships[2])
+        arrow(120 * mm, center_bottom, 105 * mm, center_bottom, compact_relationships[3])
+        arrow(60 * mm, center_bottom, 45 * mm, center_bottom, compact_relationships[4])
         return drawing
 
     table_style = TableStyle(
@@ -1891,6 +2108,20 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
             Table(origin_rows, colWidths=[70 * mm, 95 * mm], repeatRows=1, style=table_style)
         )
         if isinstance(trace, dict) and trace.get("steps"):
+            path_note = (
+                "The red outcome confirms a directly reachable application path outside "
+                "the observed CDN/WAF boundary."
+                if trace.get("status") == "direct_path_validated"
+                else "The outcome remains an evidence correlation unless direct reachability is validated."
+            )
+            origin_story.extend(
+                [
+                    Paragraph("Origin Exposure Path", styles["Section"]),
+                    Paragraph(_pdf_text(path_note), styles["BodySmall"]),
+                    Spacer(1, 2 * mm),
+                    KeepTogether([origin_path_diagram(trace), Spacer(1, 2 * mm)]),
+                ]
+            )
             trace_rows = [[
                 p("Step", "CellHead"), p("Tactic / technique", "CellHead"),
                 p("Procedure and evidence", "CellHead"), p("Status", "CellHead"),
@@ -1914,7 +2145,7 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
                 )
             origin_story.extend(
                 [
-                    Paragraph("Origin attribution chain", styles["Section"]),
+                    Paragraph("Origin attribution procedure detail", styles["Section"]),
                     LongTable(
                         trace_rows,
                         colWidths=[12 * mm, 43 * mm, 88 * mm, 22 * mm],

@@ -220,6 +220,15 @@ class InteractiveReportTests(unittest.TestCase):
         document = render_html(report)
         self.assertIn("DIRECT ORIGIN PATH VALIDATED", document)
         self.assertIn("How Cachaza reached this IP", document)
+        self.assertIn('id="origin-chain-title">Origin Exposure Path', document)
+        self.assertIn("Validated bypass", document)
+        self.assertIn(
+            'aria-label="Five-step Origin attribution chain ending at 203.0.113.45"',
+            document,
+        )
+        self.assertEqual(document.count('class="origin-chain-node"'), 5)
+        self.assertIn('class="origin-chain-node origin-chain-result critical"', document)
+        self.assertIn('href="#origin-step-4"', document)
         self.assertIn("Orange dashed relationships show the Origin attribution chain", document)
 
         report["presentation"] = {
@@ -232,6 +241,7 @@ class InteractiveReportTests(unittest.TestCase):
         self.assertIn("Professional Recon Report", professional)
         self.assertIn("Report prepared for <strong>example.com</strong>", professional)
         self.assertIn("How the assessment reached this IP", professional)
+        self.assertIn("Origin Exposure Path", professional)
         self.assertIn("How to remediate the Origin exposure", professional)
         self.assertIn("Restrict public ingress to the Origin", professional)
         self.assertNotIn("cachaza", professional.casefold())

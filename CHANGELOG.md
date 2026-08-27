@@ -8,6 +8,7 @@
 - Added the assessed domain or authorized scope as the explicit report subject.
 - Added a deterministic, vendor-neutral Origin exposure remediation roadmap with owners and closure tests to HTML and PDF.
 - Constrained the OpenRouter narrative to the supplied remediation controls and prevented invented vendor features or completion claims.
+- Added a dedicated responsive Origin Exposure Path graph to HTML and an equivalent executive infographic to PDF.
 
 ## 1.0.1 - 2026-08-27
 

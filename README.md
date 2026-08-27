@@ -598,7 +598,11 @@ reports remove the Cachaza product name from visible content, document metadata,
 embedded HTML data, and structured report output.
 
 The professional HTML adapts from widescreen committee displays to tablets and
-Android/iOS phone widths without external assets. Both HTML and PDF include a
+Android/iOS phone widths without external assets. A dedicated `Origin Exposure
+Path` graph connects the public-edge baseline, passive candidate discovery,
+CDN/WAF exclusion, authorized direct validation and attribution conclusion to the
+leading Origin IP. It becomes a vertical evidence flow on narrow screens, while
+the PDF contains the same chain as a compact executive infographic. Both HTML and PDF include a
 vendor-neutral Origin remediation roadmap covering ingress restriction,
 authenticated edge-to-Origin transport, disclosure-path cleanup, address rotation,
 default Host/SNI denial, external retesting, and regression monitoring. OpenRouter
