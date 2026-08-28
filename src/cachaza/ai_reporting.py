@@ -234,10 +234,21 @@ def generate_ai_assistance(
         fallback_used = True
         payload["response_format"] = {"type": "json_object"}
         payload.pop("provider", None)
-        response = request_json(
-            OPENROUTER_CHAT_URL, method="POST", timeout=config.timeout, retries=1,
-            headers=headers, json_body=payload,
-        )
+        try:
+            response = request_json(
+                OPENROUTER_CHAT_URL, method="POST", timeout=config.timeout, retries=1,
+                headers=headers, json_body=payload,
+            )
+        except HttpError as fallback_exc:
+            if getattr(fallback_exc, "status_code", None) == 404:
+                raise HttpError(
+                    f"OpenRouter could not route model {config.model!r}. Verify the exact "
+                    "model identifier (with no leading backslash), account access and provider "
+                    f"availability. Provider response: {fallback_exc}",
+                    status_code=404,
+                    transient=False,
+                ) from fallback_exc
+            raise
     try:
         content = response["choices"][0]["message"]["content"]
         decoded = json.loads(content) if isinstance(content, str) else content

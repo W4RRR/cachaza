@@ -111,6 +111,23 @@ class AIReportingTests(unittest.TestCase):
             with self.assertRaises(HttpError):
                 generate_ai_assistance(self._data(), AIReportConfig(api_key="secret"))
 
+    def test_openrouter_404_after_fallback_has_actionable_model_diagnostic(self) -> None:
+        with patch(
+            "cachaza.ai_reporting.request_json",
+            side_effect=[
+                HttpError("strict route unavailable", status_code=404),
+                HttpError("fallback route unavailable", status_code=404),
+            ],
+        ):
+            with self.assertRaises(HttpError) as caught:
+                generate_ai_assistance(
+                    self._data(),
+                    AIReportConfig(api_key="secret", model="~openai/gpt-latest"),
+                )
+        self.assertEqual(caught.exception.status_code, 404)
+        self.assertIn("~openai/gpt-latest", str(caught.exception))
+        self.assertIn("no leading backslash", str(caught.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

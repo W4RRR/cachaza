@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import io
 import unittest
 import urllib.error
 from unittest.mock import patch
@@ -166,6 +167,24 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(opened.call_count, 1)
         self.assertEqual(caught.exception.status_code, 401)
         self.assertFalse(caught.exception.transient)
+
+    def test_http_error_provider_detail_is_preserved_without_mutating_reason(self) -> None:
+        error = urllib.error.HTTPError(
+            "https://openrouter.ai/api/v1/chat/completions",
+            404,
+            "Not Found",
+            {},
+            io.BytesIO(b'{"error":{"message":"No endpoints found for this model"}}'),
+        )
+        with (
+            patch("urllib.request.urlopen", side_effect=error),
+            patch.object(GLOBAL_REQUEST_LIMITER, "slot", return_value=contextlib.nullcontext()),
+            self.assertRaises(HttpError) as caught,
+        ):
+            request_bytes("https://openrouter.ai/api/v1/chat/completions", retries=0)
+        self.assertEqual(caught.exception.status_code, 404)
+        self.assertIn("provider detail: No endpoints found for this model", str(caught.exception))
+        self.assertEqual(error.reason, "Not Found")
 
     def test_parses_bgp_he_dns_rows(self) -> None:
         html = """

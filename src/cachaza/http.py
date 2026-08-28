@@ -50,6 +50,7 @@ def request_bytes(
     last_error: Exception | None = None
     status_code: int | None = None
     transient = False
+    provider_detail = ""
     for attempt in range(retries + 1):
         try:
             with GLOBAL_REQUEST_LIMITER.slot():
@@ -58,6 +59,7 @@ def request_bytes(
         except urllib.error.HTTPError as exc:
             last_error = exc
             status_code = exc.code
+            provider_detail = ""
             try:
                 raw_detail = exc.read(4096).decode("utf-8", errors="replace")
                 parsed_detail = json.loads(raw_detail)
@@ -65,7 +67,8 @@ def request_bytes(
                     detail = parsed_detail.get("error") or parsed_detail.get("message") or parsed_detail.get("detail")
                     if isinstance(detail, dict):
                         detail = detail.get("message") or detail.get("code") or detail
-                    exc.reason = f"{exc.reason}; provider detail: {str(detail)[:800]}" if detail else exc.reason
+                    if detail:
+                        provider_detail = str(detail)[:800]
             except (OSError, ValueError, TypeError):
                 pass
             transient = exc.code in {408, 425, 429} or exc.code >= 500
@@ -79,8 +82,11 @@ def request_bytes(
             if attempt < retries:
                 time.sleep(min(2**attempt, 4))
     # Never echo query parameters: API keys (notably Shodan's) travel there.
+    diagnostic = str(last_error)
+    if provider_detail:
+        diagnostic = f"{diagnostic}; provider detail: {provider_detail}"
     raise HttpError(
-        f"HTTP request failed for {safe_url}: {last_error}",
+        f"HTTP request failed for {safe_url}: {diagnostic}",
         status_code=status_code,
         transient=transient,
     ) from last_error

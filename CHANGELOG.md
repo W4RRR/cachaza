@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.5 - 2026-08-28
+
+- Fixed Python 3.13 compatibility when extracting provider details from HTTP errors.
+- Made OpenRouter routing failures non-fatal so deterministic HTML/PDF reports are still exported.
+- Added an actionable OpenRouter model diagnostic after structured-output fallback fails.
+
 ## 1.0.4 - 2026-08-27
 
 - Added independent dnsenum and Fierce runtime controls with backward-compatible fallback.

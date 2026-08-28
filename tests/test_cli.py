@@ -136,6 +136,40 @@ class CliTests(unittest.TestCase):
             self.assertEqual(report["presentation"]["mode"], "professional")
             self.assertEqual(report["tool"], "professional-recon-report")
 
+    def test_op_openrouter_error_does_not_abort_report_export(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "professional"
+            credentials = Path(temp) / "providers.env"
+            credentials.write_text("OPENROUTER_API_KEY=test-key\n", encoding="utf-8")
+            with patch(
+                "cachaza.reports.generate_ai_assistance",
+                side_effect=HttpError("OpenRouter HTTP 404", status_code=404),
+            ):
+                code = main(
+                    [
+                        "run",
+                        "-d",
+                        "example.com",
+                        "-dry-run",
+                        "-stages",
+                        "asn",
+                        "-op",
+                        "-api-config",
+                        str(credentials),
+                        "-o",
+                        str(root),
+                        "-silent",
+                    ]
+                )
+            self.assertEqual(code, 0)
+            self.assertTrue((root / "report.html").is_file())
+            self.assertTrue((root / "report.pdf").is_file())
+            status = json.loads(
+                (root / "rest" / "ai" / "reporting-status.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(status["status"], "error")
+            self.assertIn("404", status["error"])
+
     def test_normalize_command(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             source = Path(temp) / "input.txt"
