@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.7 - 2026-08-28
+
+- Made `-resume` idempotent for output handling: missing or empty directories are created as new workspaces, while compatible existing workspaces continue from checkpoints.
+- Kept scope mismatch and non-workspace protections for populated output directories.
+
 ## 1.0.6 - 2026-08-28
 
 - Changed AI executive summaries to concise bullet highlights in HTML and PDF.

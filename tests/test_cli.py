@@ -247,6 +247,31 @@ class CliTests(unittest.TestCase):
             self.assertEqual(after, before)
             self.assertTrue((root / "report.html").is_file())
 
+    def test_resume_creates_missing_or_empty_output_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            for directory_exists in (False, True):
+                with self.subTest(directory_exists=directory_exists):
+                    root = Path(temp) / ("empty" if directory_exists else "missing")
+                    if directory_exists:
+                        root.mkdir()
+                    code = main(
+                        [
+                            "run",
+                            "-d",
+                            "example.com",
+                            "-dry-run",
+                            "-stages",
+                            "asn",
+                            "-o",
+                            str(root),
+                            "-resume",
+                            "-silent",
+                        ]
+                    )
+                    self.assertEqual(code, 0)
+                    self.assertTrue((root / "rest" / "scope.json").is_file())
+                    self.assertTrue((root / "report.json").is_file())
+
     def test_output_option_rejects_a_different_scope(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "run"

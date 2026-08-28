@@ -236,7 +236,7 @@ its findings. Direct probes must be explicitly authorized with -active.""",
     state.add_argument(
         "-resume",
         action="store_true",
-        help="require and resume an existing compatible -o workspace using stage checkpoints",
+        help="create a new -o workspace or resume it when compatible stage checkpoints exist",
     )
     state.add_argument(
         "-fresh",
@@ -771,8 +771,6 @@ def _prepare_run_output(
     if root.exists() and not root.is_dir():
         raise ValidationError(f"output path exists and is not a directory: {root}")
     if not root.exists() or not any(root.iterdir()):
-        if resume_requested:
-            raise ValidationError(f"resume directory does not exist or is empty: {root}")
         return str(root), False
 
     scope_file = root / "rest" / "scope.json"
