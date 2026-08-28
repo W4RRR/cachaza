@@ -91,7 +91,8 @@ class SourceTests(unittest.TestCase):
         request.assert_not_called()
 
     def test_censys_query_and_scope_extraction(self) -> None:
-        self.assertIn("web.hostname=~", censys_query("example.com"))
+        self.assertIn('web.hostname:"example.com"', censys_query("example.com"))
+        self.assertNotIn("=~", censys_query("example.com"))
         payload = {
             "result": {
                 "hits": [

@@ -143,6 +143,8 @@ class RunOptions:
     harvester_dns_server: str | None = None
     dns_enum_tools: list[str] = field(default_factory=lambda: ["dnsenum", "fierce"])
     dns_enum_max_runtime: int = 300
+    dnsenum_max_runtime: int | None = None
+    fierce_max_runtime: int | None = None
     blackwidow_depth: int | None = None
     blackwidow_path: str | None = None
     origin: OriginConfig | None = None
@@ -195,6 +197,8 @@ class Pipeline:
             # by corporate/API/HTTP/etc. Preserve their existing checkpoints
             # when an operator tunes or upgrades this stage-specific limit.
             options.pop("dns_enum_max_runtime", None)
+            options.pop("dnsenum_max_runtime", None)
+            options.pop("fierce_max_runtime", None)
         payload = json.dumps(
             {
                 "stage": name,
@@ -928,8 +932,9 @@ class Pipeline:
                         )
                     elif status_code == 422:
                         action = (
-                            "Censys accepted authentication but rejected the query or organization context; "
-                            "verify CENSYS_ORG_ID and the current CenQL field syntax."
+                            "Censys accepted authentication but rejected an input. Remove CENSYS_ORG_ID to "
+                            "use the authenticated user's free wallet, or set it to the exact organization "
+                            "UUID. The request uses current CenQL domain fields without regex."
                         )
                     else:
                         action = "Retry later if the provider reports a transient 429/5xx response."
@@ -1433,6 +1438,10 @@ class Pipeline:
             if not binary:
                 continue
             for root in self.target.domains:
+                runtime = (
+                    self.options.dnsenum_max_runtime if tool == "dnsenum"
+                    else self.options.fierce_max_runtime
+                ) or self.options.dns_enum_max_runtime
                 argv = dns_enum.build_argv(
                     binary,
                     tool,
@@ -1441,10 +1450,10 @@ class Pipeline:
                 )
                 self.console.info(
                     f"{tool} may be quiet while checking its DNS wordlist; "
-                    f"maximum runtime for {root}: {self.options.dns_enum_max_runtime}s"
+                    f"maximum runtime for {root}: {runtime}s"
                 )
                 result = self.runner.run(
-                    argv, timeout=self.options.dns_enum_max_runtime
+                    argv, timeout=runtime
                 )
                 if result.skipped:
                     continue
@@ -1454,7 +1463,7 @@ class Pipeline:
                 )
                 if result.returncode != 0:
                     reason = (
-                        f"reached the {self.options.dns_enum_max_runtime}s runtime limit"
+                        f"reached the {runtime}s runtime limit"
                         if result.returncode == 124
                         else f"exited with {result.returncode}"
                     )

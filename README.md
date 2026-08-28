@@ -23,7 +23,7 @@ _________     _____  _________   ___ ___    _____  __________  _____
  \______  /\____|__  /\______  /\___|_  /\____|__  /_______ \____|__  /
         \/         \/        \/       \/         \/        \/       \/
                    github.com/W4RRR/cachaza by W4RRR
-                                 v1.0.2
+                                 v1.0.4
 ```
 
 Cachaza turns an explicitly defined domain or network scope into a reproducible reconnaissance workspace. It collects passive intelligence first, applies scope decisions to every observation, and requires explicit authorization before direct-contact stages run.
@@ -524,13 +524,18 @@ All active bundles require written authorization and `-active`. The `full` profi
 DNS enumeration is bounded even when an upstream tool becomes quiet. Cachaza runs
 `dnsenum` without reverse lookups, with at most two worker threads and a DNS query
 timeout of at most 10 seconds. Current Kali Fierce releases are invoked with
-`--domain`. Each adapter has a five-minute default process limit; change it with
-`-dns-enum-max-runtime SECONDS` (30–3600). A timeout preserves and normalizes all
+`--domain`. Each adapter has a five-minute default process limit. Use
+`-dnsenum-max-runtime SECONDS` and `-fierce-max-runtime SECONDS` independently;
+the legacy `-dns-enum-max-runtime SECONDS` remains their shared fallback (30–3600).
+A timeout preserves and normalizes all
 partial output, records exit code 124, and continues unless `-strict` is selected.
 
 ## 📊 Reports and workspace
 
 Default runs write JSON and TXT reports. Use `-format all` for every supported format:
+
+Every run also writes `rest/execution.log`, with UTC timestamps, commands, tool
+stdout/stderr, duration, configured timeout, return code, stage messages and warnings.
 
 | Format | Content |
 |---|---|
@@ -740,14 +745,14 @@ cachaza -update
 
 Both commands are equivalent.
 
-Once v1.0.2 has been merged into `main` and the `v1.0.2` Release has been published from that same commit, the normal upgrade is:
+Once v1.0.4 has been merged into `main` and the `v1.0.4` Release has been published from that same commit, the normal upgrade is:
 
 ```bash
 cachaza -up
 cachaza -version
 ```
 
-The second command must print `cachaza 1.0.2`.
+The second command must print `cachaza 1.0.4`.
 
 ### Publishing a GitHub Release
 
@@ -758,8 +763,8 @@ Create the tag only after the release pull request has been merged into `main`:
 ```bash
 git switch main
 git pull --ff-only origin main
-git tag -a v1.0.2 -m "Cachaza v1.0.2"
-git push origin v1.0.2
+git tag -a v1.0.4 -m "Cachaza v1.0.4"
+git push origin v1.0.4
 ```
 
 The Release must be public—not a draft or prerelease—so `/releases/latest` and `cachaza -up` can discover it.

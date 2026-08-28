@@ -567,6 +567,18 @@ def _build_origin_trace(origin: dict[str, Any]) -> dict[str, Any]:
         "status_label": status_label,
         "severity": severity,
         "origin_ip": origin_ip,
+        "origin_ips": [
+            str(value) for value in origin.get("origin_ips", [origin_ip]) if str(value).strip()
+        ] or [origin_ip],
+        "origin_outcomes": [
+            {
+                "ip": str(item.get("ip") or ""),
+                "probability_percent": int(item.get("origin_probability_percent", 0) or 0),
+                "confidence_band": str(item.get("confidence_band") or "inconclusive"),
+                "classification": str(item.get("classification") or "inconclusive"),
+            }
+            for item in origin.get("origins", []) if isinstance(item, dict) and item.get("ip")
+        ],
         "cdn_waf_provider": cdn_provider,
         "probability_percent": max(0, min(100, probability)),
         "confidence_band": str(origin.get("confidence_band") or "inconclusive"),
@@ -1005,6 +1017,20 @@ def _build_graph(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
                 else "leading origin candidate",
                 origin_path=True,
             )
+            for outcome in trace.get("origin_outcomes", []):
+                if not isinstance(outcome, dict) or outcome.get("ip") == trace.get("origin_ip"):
+                    continue
+                additional_id = add_node("origin_candidate", outcome.get("ip"), source="origin-correlation")
+                if not additional_id:
+                    continue
+                nodes[additional_id].update({
+                    "is_origin_path": True,
+                    "origin_probability_percent": outcome.get("probability_percent", 0),
+                    "confidence_band": outcome.get("confidence_band", "inconclusive"),
+                    "classification": outcome.get("classification", "inconclusive"),
+                    "validation": "Additional eligible Origin IP",
+                })
+                add_edge(previous, additional_id, "additional eligible origin", origin_path=True)
 
     serialized_nodes: list[dict[str, Any]] = []
     for node in nodes.values():
@@ -1189,6 +1215,17 @@ def build_report_data(
     data["origin_remediation"] = _build_origin_remediation(data["origin_trace"])
     data["subdomain_summary"] = build_subdomain_summary(data["findings"])
     data["key_findings"] = build_key_findings(data["findings"])
+    grouped_tools: dict[str, dict[str, Any]] = {}
+    for finding in data["findings"]:
+        tool = str(finding.get("source") or "unknown")
+        row = grouped_tools.setdefault(tool, {"tool": tool, "total": 0, "in_scope": 0, "types": {}, "highlights": []})
+        row["total"] += 1
+        row["in_scope"] += int(bool(finding.get("in_scope")))
+        kind = str(finding.get("kind") or "other")
+        row["types"][kind] = row["types"].get(kind, 0) + 1
+        if len(row["highlights"]) < 8:
+            row["highlights"].append({"kind": kind, "value": str(finding.get("value") or ""), "in_scope": bool(finding.get("in_scope"))})
+    data["tool_findings"] = sorted(grouped_tools.values(), key=lambda item: (-item["total"], item["tool"]))
     data["graph"] = _build_graph(data)
     return data
 
@@ -2060,7 +2097,7 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
             ("Candidates", origin.get("candidates_collected", 0)),
             ("Actively validated", origin.get("candidates_actively_validated", 0)),
             ("Direct requests", origin.get("direct_requests_performed", 0)),
-            ("Origin IP", origin.get("origin_ip") or origin.get("highest_confidence_candidate") or "none"),
+            ("Origin IP(s)", ", ".join(origin.get("origin_ips", [])) or origin.get("origin_ip") or origin.get("highest_confidence_candidate") or "none"),
             ("Origin probability", f"{origin.get('origin_probability_percent', origin.get('confidence_score', 0))}%"),
             ("Confidence band", origin.get("confidence_band", "inconclusive")),
             ("Classification", origin.get("classification", "inconclusive")),
@@ -2226,10 +2263,10 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
                     ),
                 ]
             )
-        origin_story.extend([
-            Paragraph(_pdf_text(origin.get("probability_notice", "")), styles["BodySmall"]),
-            Paragraph(_pdf_text(origin.get("warning", "")), styles["Warning"]),
-        ])
+        if origin.get("probability_notice"):
+            origin_story.append(Paragraph(_pdf_text(origin["probability_notice"]), styles["BodySmall"]))
+        if origin.get("warning"):
+            origin_story.append(Paragraph(_pdf_text(origin["warning"]), styles["Warning"]))
 
     ai_story: list[Any] = []
     ai_assistance = data.get("ai_assistance", {})
@@ -2260,6 +2297,14 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
             Paragraph("Limitations", styles["Section"]),
             Paragraph(_pdf_text(narrative.get("limitations", "")), styles["BodySmall"]),
             Paragraph(_pdf_text(ai_assistance.get("notice", "")), styles["Warning"]),
+        ]
+    elif ai_assistance.get("status") == "error":
+        ai_story = [
+            Paragraph("AI-assisted executive brief unavailable", styles["Section"]),
+            Paragraph(
+                _pdf_text(ai_assistance.get("error") or ai_assistance.get("notice") or "OpenRouter did not return a narrative."),
+                styles["Warning"],
+            ),
         ]
 
     story: list[Any] = [
@@ -2351,6 +2396,14 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
     stage_rows.extend([[p(item["name"]), p(item["status"]), p(item.get("details", ""))] for item in data["stages"]])
     story.append(LongTable(stage_rows, colWidths=[35 * mm, 30 * mm, 100 * mm], repeatRows=1, style=table_style))
 
+    tool_rows = [[p(value, "CellHead") for value in ("Tool / source", "Total", "In scope", "Finding types")]]
+    for item in data.get("tool_findings", []):
+        kinds = ", ".join(f"{name}: {count}" for name, count in sorted(item.get("types", {}).items()))
+        tool_rows.append([p(item.get("tool", "unknown")), p(item.get("total", 0)), p(item.get("in_scope", 0)), p(kinds or "-")])
+    if len(tool_rows) > 1:
+        story.append(Paragraph("Findings by tool", styles["Section"]))
+        story.append(LongTable(tool_rows, colWidths=[38 * mm, 18 * mm, 22 * mm, 87 * mm], repeatRows=1, style=table_style))
+
     source_rows = [
         [p(value, "CellHead") for value in ("External source", "Status", "Retrieved", "New", "Diagnostic")]
     ]
@@ -2386,9 +2439,13 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
         provider_rows.append(
             [
                 p(provider),
-                p(status.get("status", "unknown")),
+                Paragraph(
+                    f'<font color="{("#D83B4D" if status.get("status") == "error" else "#1F9D72")}">'
+                    f'{_pdf_text(status.get("status", "unknown"))}</font>',
+                    styles["Cell"],
+                ),
                 p(status.get("findings", 0)),
-                p(status.get("error") or "-"),
+                p(status.get("action") or status.get("error") or "-"),
             ]
         )
     if len(provider_rows) > 1:

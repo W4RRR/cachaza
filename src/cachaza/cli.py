@@ -465,7 +465,15 @@ its findings. Direct probes must be explicitly authorized with -active.""",
         type=int,
         default=300,
         metavar="SECONDS",
-        help="maximum runtime for each dnsenum/Fierce process (30-3600; default: 300)",
+        help="legacy shared runtime for dnsenum/Fierce (30-3600; default: 300)",
+    )
+    run.add_argument(
+        "-dnsenum-max-runtime", type=int, default=None, metavar="SECONDS",
+        help="dnsenum-only runtime; overrides -dns-enum-max-runtime (30-3600)",
+    )
+    run.add_argument(
+        "-fierce-max-runtime", type=int, default=None, metavar="SECONDS",
+        help="Fierce-only runtime; overrides -dns-enum-max-runtime (30-3600)",
     )
     run.add_argument(
         "-blw",
@@ -709,6 +717,12 @@ def _validate_run_args(args: argparse.Namespace, target: TargetSpec) -> None:
         raise ValidationError("-harvester-limit must be between 1 and 5000")
     if not 30 <= args.dns_enum_max_runtime <= 3600:
         raise ValidationError("-dns-enum-max-runtime must be between 30 and 3600")
+    for flag, value in (
+        ("-dnsenum-max-runtime", args.dnsenum_max_runtime),
+        ("-fierce-max-runtime", args.fierce_max_runtime),
+    ):
+        if value is not None and not 30 <= value <= 3600:
+            raise ValidationError(f"{flag} must be between 30 and 3600")
     if args.blackwidow_depth is not None and not 1 <= args.blackwidow_depth <= 10:
         raise ValidationError("-blw LEVEL must be between 1 and 10")
     _validate_ports(args.ports)
@@ -837,6 +851,8 @@ def command_run(args: argparse.Namespace, console: Console) -> int:
         raise ValidationError("-dns-enum-tools must contain dnsenum and/or fierce")
     output, resume = _prepare_run_output(args.output, args.resume, args.fresh, target)
     workspace = RunWorkspace.create(output, target, resume=resume)
+    console.attach_log(workspace.rest / "execution.log")
+    console.info(f"Full execution log: {workspace.rest / 'execution.log'}")
     origin_config = _origin_config_from_args(args) if args.origin_auto else None
     options = RunOptions(
         stages=stages,
@@ -888,6 +904,8 @@ def command_run(args: argparse.Namespace, console: Console) -> int:
         harvester_dns_server=args.harvester_dns_server,
         dns_enum_tools=dns_enum_tools,
         dns_enum_max_runtime=args.dns_enum_max_runtime,
+        dnsenum_max_runtime=args.dnsenum_max_runtime,
+        fierce_max_runtime=args.fierce_max_runtime,
         blackwidow_depth=args.blackwidow_depth,
         blackwidow_path=args.blackwidow_path,
         origin=origin_config,
@@ -900,6 +918,7 @@ def command_run(args: argparse.Namespace, console: Console) -> int:
             if report.is_file():
                 print(f"{report_format.upper()} report: {report}")
         print(f"Supporting artifacts: {root / 'rest'}")
+        print(f"Full execution log: {root / 'rest' / 'execution.log'}")
         print(
             render_key_findings_console(
                 build_key_findings(workspace.findings),
@@ -919,13 +938,16 @@ def command_run(args: argparse.Namespace, console: Console) -> int:
                 if isinstance(status, dict) and status.get("status") == "error"
             ]
             if provider_issues:
-                print("\nPROVIDER ISSUES")
-                print("---------------")
+                print("\n" + console.paint("PROVIDER ISSUES", "1;31"))
+                print(console.paint("---------------", "31"))
                 for name, status in provider_issues:
                     code = status.get("http_status")
                     action = status.get("action") or status.get("error") or "Review provider credentials."
                     suffix = f" HTTP {code}" if code else ""
-                    print(f"{name}{suffix}: {action}")
+                    print(
+                        console.paint(f"{name}{suffix}", "1;31")
+                        + ": " + console.paint(str(action), "33")
+                    )
         origin_ranking = root / "rest" / "origin" / "final-ranking.json"
         if origin_ranking.is_file():
             try:

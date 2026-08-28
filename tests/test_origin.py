@@ -425,6 +425,8 @@ class OriginEngineTests(unittest.TestCase):
                 {"provider": "Cloudflare", "confidence": 95, "signals": []},
             )
         self.assertEqual(ranking["origin_ip"], plausible.ip)
+        self.assertEqual(ranking["origin_ips"], [plausible.ip])
+        self.assertEqual(ranking["origins"][0]["ip"], plausible.ip)
         self.assertEqual(ranking["origin_probability_percent"], 70)
         self.assertEqual(ranking["confidence_band"], "probable")
         self.assertEqual(len(ranking["candidate_probabilities"]), 2)

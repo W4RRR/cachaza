@@ -90,6 +90,7 @@ class AIReportingTests(unittest.TestCase):
                 self._data(), AIReportConfig(api_key="secret", model="openai/test-model")
             )
         self.assertEqual(result["status"], "generated")
+        self.assertEqual(result["structured_output_mode"], "json_schema")
         self.assertEqual(result["narrative"]["recommended_actions"][0], "Restrict ingress")
         kwargs = request.call_args.kwargs
         self.assertEqual(kwargs["headers"]["Authorization"], "Bearer secret")
@@ -98,6 +99,7 @@ class AIReportingTests(unittest.TestCase):
         self.assertTrue(
             kwargs["json_body"]["provider"]["require_parameters"]
         )
+        self.assertEqual(kwargs["json_body"]["plugins"], [{"id": "response-healing"}])
         self.assertIn("origin_remediation", serialized_payload)
         self.assertIn("do not name the underlying collection product", serialized_payload)
 

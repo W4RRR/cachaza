@@ -38,6 +38,22 @@ def _table(headers: list[str], rows: list[list[str]]) -> str:
     return f'<div class="table-wrap"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
 
 
+def _provider_table(statuses: dict[str, Any]) -> str:
+    rows: list[str] = []
+    for provider, raw in sorted(statuses.items()):
+        if not isinstance(raw, dict):
+            continue
+        state = str(raw.get("status") or "unknown").lower()
+        diagnostic = str(raw.get("action") or raw.get("error") or "-")
+        rows.append(
+            f'<tr class="status-row status-{escape(state)}"><td>{escape(provider)}</td>'
+            f'<td><span class="status-pill {escape(state)}">{escape(state)}</span></td>'
+            f'<td>{escape(str(raw.get("findings", 0)))}</td><td>{escape(diagnostic)}</td></tr>'
+        )
+    body = "".join(rows) or '<tr><td colspan="4" class="empty">No providers configured</td></tr>'
+    return '<div class="table-wrap"><table><thead><tr><th>Provider</th><th>Status</th><th>Findings</th><th>Diagnostic / action</th></tr></thead><tbody>' + body + '</tbody></table></div>'
+
+
 def _white_label_value(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: _white_label_value(item) for key, item in value.items()}
@@ -184,15 +200,25 @@ def render_html(data: dict[str, Any]) -> str:
                 + (f'<ul class="trace-evidence">{evidence_html}</ul>' if evidence_html else "")
                 + '</div></article>'
             )
-        chain_items.append(
-            f'<article class="origin-chain-node origin-chain-result {escape(trace_severity)}">'
-            '<span class="origin-chain-step">Leading Origin IP</span>'
-            f'<code>{escape(str(origin_trace.get("origin_ip")))}</code>'
-            f'<strong>{escape(str(origin_trace.get("probability_percent") or 0))}% · '
-            f'{escape(str(origin_trace.get("confidence_band") or "inconclusive"))}</strong>'
-            f'<small>{escape(str(origin_trace.get("status_label") or "Origin candidate"))}</small>'
-            '</article>'
-        )
+        outcomes = origin_trace.get("origin_outcomes", []) or [{
+            "ip": origin_trace.get("origin_ip"),
+            "probability_percent": origin_trace.get("probability_percent", 0),
+            "confidence_band": origin_trace.get("confidence_band", "inconclusive"),
+        }]
+        for index, outcome in enumerate(outcomes):
+            if not isinstance(outcome, dict) or not outcome.get("ip"):
+                continue
+            if index:
+                chain_items.append('<div class="origin-chain-link" aria-hidden="true"><span>alternate validated path</span><b>↗</b></div>')
+            chain_items.append(
+                f'<article class="origin-chain-node origin-chain-result {escape(trace_severity)}">'
+                f'<span class="origin-chain-step">{"Leading" if index == 0 else "Additional"} Origin IP</span>'
+                f'<code>{escape(str(outcome.get("ip")))}</code>'
+                f'<strong>{escape(str(outcome.get("probability_percent") or 0))}% · '
+                f'{escape(str(outcome.get("confidence_band") or "inconclusive"))}</strong>'
+                f'<small>{escape(str(origin_trace.get("status_label") or "Origin candidate"))}</small>'
+                '</article>'
+            )
         exposure_title = (
             "HIGH-PRIORITY EXPOSURE · DIRECT ORIGIN PATH VALIDATED"
             if trace_direct else "ORIGIN ATTRIBUTION · VALIDATION STATUS REQUIRES REVIEW"
@@ -264,11 +290,13 @@ def render_html(data: dict[str, Any]) -> str:
             )
         elif ai_assistance.get("status") == "error":
             ai_panel = (
-                '<details class="section ai-section" id="ai-executive-section">'
+                '<details class="section ai-section" open id="ai-executive-section">'
                 '<summary>AI-assisted executive brief <span class="ai-badge warning">Unavailable</span></summary>'
                 '<div class="section-body"><p class="section-note">'
                 f'{escape(str(ai_assistance.get("notice") or "Optional OpenRouter editorial pass was unavailable."))}'
-                '</p></div></details>'
+                '</p><div class="zone-warning"><strong>OpenRouter diagnostic:</strong> '
+                f'{escape(str(ai_assistance.get("error") or "No provider diagnostic was returned."))}'
+                '</div><p class="section-note">Check OPENROUTER_API_KEY, account credits, model access and the requested model slug. The deterministic report remains complete.</p></div></details>'
             )
     remediation = data.get("origin_remediation", {})
     remediation_panel = ""
@@ -363,19 +391,7 @@ def render_html(data: dict[str, Any]) -> str:
             ["Stage", "Status", "Details"],
             [[item["name"], item["status"], item.get("details", "")] for item in data["stages"]],
         ),
-        "__PROVIDER_TABLE__": _table(
-            ["Provider", "Status", "Findings", "Diagnostic"],
-            [
-                [
-                    provider,
-                    str(status.get("status") or "unknown"),
-                    str(status.get("findings", 0)),
-                    str(status.get("error") or "-"),
-                ]
-                for provider, status in sorted(data.get("provider_status", {}).items())
-                if isinstance(status, dict)
-            ],
-        ),
+        "__PROVIDER_TABLE__": _provider_table(data.get("provider_status", {})),
         "__SOURCE_TABLE__": _table(
             ["Source", "Status", "Retrieved", "New", "Diagnostic"],
             [
@@ -565,6 +581,26 @@ def render_html(data: dict[str, Any]) -> str:
             f"{omitted_count} dnsenum/Fierce-only names are omitted as noise."
         )
     domains = ", ".join(data["scope"].get("domains", [])) or "No domains supplied"
+    tool_cards: list[str] = []
+    for item in data.get("tool_findings", []):
+        types = "".join(
+            f'<span>{escape(str(kind))}: {escape(str(count))}</span>'
+            for kind, count in sorted(item.get("types", {}).items())
+        )
+        highlights = "".join(
+            f'<li><code>{escape(str(row.get("value") or "-"))}</code><small>{escape(str(row.get("kind") or "other"))}</small></li>'
+            for row in item.get("highlights", [])
+        )
+        tool_cards.append(
+            '<details class="tool-finding"><summary>'
+            f'<strong>{escape(str(item.get("tool") or "unknown"))}</strong>'
+            f'<span>{escape(str(item.get("total", 0)))} findings · {escape(str(item.get("in_scope", 0)))} in scope</span>'
+            f'</summary><div class="tool-finding-body"><div class="tool-types">{types}</div><ul>{highlights}</ul></div></details>'
+        )
+    tool_findings_panel = (
+        '<div class="tool-findings-grid">' + "".join(tool_cards) + "</div>"
+        if tool_cards else '<p class="key-empty">No tool findings recorded.</p>'
+    )
     # Keep report data inert even inside an HTML script element. Escaping the
     # HTML-significant code points also protects against premature tag closure
     # if a tool returns attacker-controlled metadata.
@@ -587,6 +623,8 @@ main{width:100%;max-width:none;margin:0;padding:clamp(16px,2vw,38px) clamp(12px,
 .zone-warning{margin:12px 0;border:1px solid #ff5d6c;border-left:5px solid #ff5d6c;border-radius:9px;background:rgba(197,50,65,.18);color:#ffd8dc;padding:11px 13px}
 .section{margin-top:16px;border:1px solid var(--line);border-radius:14px;background:var(--panel);overflow:hidden}.section>summary{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 18px;cursor:pointer;font-size:18px;font-weight:700;list-style:none}.section>summary::-webkit-details-marker{display:none}.section>summary::after{content:"+";color:var(--accent);font-size:24px}.section[open]>summary::after{content:"−"}.section-body{padding:0 18px 18px}.section-note{margin:0;color:var(--muted)}
 .table-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px}table{width:100%;border-collapse:collapse;background:var(--panel)}th,td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--blue);font-size:12px;text-transform:uppercase;letter-spacing:.08em}tr:last-child td{border-bottom:0}.empty{color:var(--muted)}code{color:var(--accent);overflow-wrap:anywhere}
+.status-row.status-error td{background:rgba(255,89,111,.07);color:#ffd5db}.status-pill{display:inline-flex;border:1px solid var(--line);border-radius:999px;padding:2px 8px;font-size:10px;font-weight:900;text-transform:uppercase}.status-pill.error{border-color:#ff596f;background:rgba(255,89,111,.14);color:#ff9aaa}.status-pill.ok{border-color:var(--accent);background:rgba(83,211,164,.1);color:var(--accent)}.status-pill.pending,.status-pill.partial{border-color:#f6b94a;background:rgba(246,185,74,.1);color:#ffd083}.tool-findings-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px;margin-top:14px}.tool-finding{border:1px solid var(--line);border-radius:11px;background:rgba(7,20,33,.58);overflow:hidden}.tool-finding>summary{display:grid;gap:3px;padding:12px;cursor:pointer}.tool-finding>summary span{color:var(--muted);font-size:11px}.tool-finding-body{border-top:1px solid var(--line);padding:10px}.tool-types{display:flex;gap:5px;flex-wrap:wrap}.tool-types span{border-radius:999px;background:rgba(112,176,255,.1);color:#abd0fa;padding:2px 7px;font-size:9px}.tool-finding ul{display:grid;gap:6px;margin:10px 0 0;padding:0;list-style:none}.tool-finding li{display:flex;justify-content:space-between;gap:8px;border-radius:7px;background:rgba(15,37,62,.65);padding:6px 8px}.tool-finding li small{color:var(--muted)}
+.node-info{opacity:0!important;pointer-events:none;transition:opacity .15s}.node-card.active .node-info,.node-card:focus .node-info{opacity:1!important}
 .origin-hero{display:flex;align-items:center;justify-content:space-between;gap:18px;margin:14px 0;padding:18px;border:1px solid rgba(83,211,164,.45);border-radius:14px;background:linear-gradient(135deg,rgba(83,211,164,.12),rgba(112,176,255,.08))}.origin-hero-label{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.1em}.origin-hero code{display:block;margin-top:4px;color:#fff;font-size:22px;font-weight:800}.origin-probability{text-align:right}.origin-probability strong{display:block;color:var(--accent);font-size:30px;line-height:1}.origin-probability span{color:var(--muted);font-size:11px;text-transform:uppercase}.origin-ranking{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px;margin:12px 0 16px}.origin-rank-card{border:1px solid var(--line);border-radius:11px;background:rgba(7,20,33,.66);padding:11px}.origin-rank-head{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:9px;align-items:center}.origin-rank-number{color:var(--muted);font-size:11px}.origin-rank-head code{overflow:hidden;text-overflow:ellipsis}.origin-rank-head strong{color:var(--accent)}.origin-rank-card progress{width:100%;height:8px;margin:10px 0 7px;border:0;border-radius:999px;overflow:hidden;background:var(--soft);accent-color:var(--accent)}.origin-rank-card progress::-webkit-progress-bar{background:var(--soft)}.origin-rank-card progress::-webkit-progress-value{background:linear-gradient(90deg,var(--blue),var(--accent))}.origin-rank-meta{display:flex;gap:6px;flex-wrap:wrap}.origin-rank-meta span{border:1px solid var(--line);border-radius:999px;color:var(--muted);padding:2px 7px;font-size:10px}
 .origin-hero.critical{border-color:rgba(255,89,111,.72);background:linear-gradient(135deg,rgba(183,36,58,.26),rgba(112,176,255,.08));box-shadow:inset 0 0 0 1px rgba(255,89,111,.12),0 16px 46px rgba(88,9,25,.16)}.origin-identity{min-width:0}.origin-status-chip{display:inline-flex;margin-top:9px;border:1px solid var(--line);border-radius:999px;padding:3px 8px;color:var(--muted);font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}.origin-status-chip.critical{border-color:rgba(255,89,111,.62);background:rgba(255,89,111,.14);color:#ff9aaa}.origin-status-chip.warning{border-color:rgba(246,185,74,.62);background:rgba(246,185,74,.12);color:#ffd083}.origin-exposure-alert{display:grid;grid-template-columns:46px minmax(0,1fr);gap:14px;align-items:start;margin:16px 0;border:1px solid rgba(112,176,255,.42);border-left:5px solid var(--blue);border-radius:13px;background:rgba(16,39,64,.74);padding:15px}.origin-exposure-alert.critical{border-color:rgba(255,89,111,.58);border-left-color:#ff596f;background:linear-gradient(110deg,rgba(142,30,49,.28),rgba(16,39,64,.72))}.origin-exposure-alert.warning{border-left-color:#f6b94a}.origin-alert-icon{display:grid;place-items:center;width:42px;height:42px;border:1px solid currentColor;border-radius:13px;color:#ff8294;font-size:21px;font-weight:900}.origin-exposure-alert span{display:block;color:#ff91a1;font-size:10px;font-weight:900;letter-spacing:.12em;text-transform:uppercase}.origin-exposure-alert strong{display:block;margin-top:3px;color:#fff;font-size:18px}.origin-exposure-alert p{margin:5px 0 0;color:#c4d3e2}.origin-trace-intro{display:flex;align-items:end;justify-content:space-between;gap:24px;margin:23px 0 11px}.origin-trace-intro h3{margin:3px 0 0;font-size:20px}.origin-trace-intro p{max-width:680px;margin:0;color:var(--muted);font-size:12px}
 .origin-chain-shell{position:relative;overflow:hidden;margin:14px 0 22px;border:1px solid rgba(255,154,82,.38);border-radius:16px;background:radial-gradient(circle at 8% 10%,rgba(112,176,255,.14),transparent 30%),linear-gradient(145deg,rgba(8,23,39,.96),rgba(13,31,51,.96));padding:16px}.origin-chain-shell::before{content:"";position:absolute;inset:0;pointer-events:none;background-image:radial-gradient(rgba(112,176,255,.16) 1px,transparent 1px);background-size:18px 18px;mask-image:linear-gradient(to bottom,rgba(0,0,0,.72),transparent)}.origin-chain-header,.origin-chain-caption,.origin-chain-viewport{position:relative}.origin-chain-header{display:flex;align-items:center;justify-content:space-between;gap:16px}.origin-chain-header h3{margin:3px 0 0;font-size:20px}.origin-chain-badge{display:inline-flex;border:1px solid rgba(246,185,74,.48);border-radius:999px;background:rgba(246,185,74,.1);color:#ffd083;padding:4px 9px;font-size:10px;font-weight:900;letter-spacing:.08em;text-transform:uppercase}.origin-chain-badge.critical{border-color:rgba(255,89,111,.62);background:rgba(255,89,111,.14);color:#ff9aaa}.origin-chain-caption{max-width:920px;margin:9px 0 15px;color:var(--muted);font-size:11px}.origin-chain-viewport{overflow-x:auto;overscroll-behavior-inline:contain;padding:3px 2px 8px}.origin-chain-track{display:flex;align-items:stretch;width:max-content;min-width:100%}.origin-chain-node{display:flex;flex:0 0 172px;min-height:154px;flex-direction:column;border:1px solid rgba(112,176,255,.34);border-top:3px solid var(--blue);border-radius:12px;background:rgba(7,20,33,.94);padding:12px;box-shadow:0 11px 28px rgba(0,0,0,.2)}.origin-chain-step{color:var(--blue);font-size:9px;font-weight:900;letter-spacing:.1em;text-transform:uppercase}.origin-chain-node>strong{margin-top:8px;color:#eef7ff;font-size:12px;line-height:1.35}.origin-chain-node>small{margin-top:7px;color:var(--muted);font-size:9px;line-height:1.4}.origin-chain-node>a{align-self:flex-start;margin-top:auto;color:#9dccff;font-size:9px;font-weight:800;text-decoration:none}.origin-chain-node>a:hover{text-decoration:underline}.origin-chain-link{display:grid;flex:0 0 58px;place-content:center;text-align:center;color:#ffb77f}.origin-chain-link span{display:block;max-width:58px;font-size:8px;line-height:1.2}.origin-chain-link b{display:block;margin-top:4px;font-size:19px;line-height:1}.origin-chain-result{border-color:rgba(246,185,74,.58);border-top-color:#f6b94a;background:linear-gradient(150deg,rgba(77,53,12,.56),rgba(7,20,33,.96))}.origin-chain-result.critical{border-color:rgba(255,89,111,.72);border-top-color:#ff596f;background:linear-gradient(150deg,rgba(112,23,41,.72),rgba(27,15,28,.97));box-shadow:0 12px 34px rgba(92,9,28,.32)}.origin-chain-result code{margin-top:9px;color:#fff;font-size:15px;font-weight:900}.origin-chain-result>strong{color:#ffb2bd}.origin-procedure-heading{display:flex;align-items:end;justify-content:space-between;gap:14px;margin-top:18px;border-bottom:1px solid rgba(121,160,205,.22);padding-bottom:8px}.origin-procedure-heading span{font-size:14px;font-weight:800}.origin-procedure-heading small{color:var(--muted);font-size:10px}.origin-trace{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:11px 0 18px}.trace-step{position:relative;min-width:0;border:1px solid rgba(121,160,205,.28);border-radius:13px;background:linear-gradient(155deg,rgba(15,37,62,.92),rgba(8,22,38,.94));padding:14px;scroll-margin-top:18px}.trace-step:not(:last-child)::after{content:"→";position:absolute;z-index:2;right:-16px;top:29px;color:var(--blue);font-size:17px}.trace-number{display:grid;place-items:center;width:28px;height:28px;margin-bottom:11px;border:1px solid rgba(112,176,255,.48);border-radius:9px;background:rgba(36,107,206,.18);color:var(--blue);font-weight:900}.trace-step-head span{display:block;color:var(--muted);font-size:9px;letter-spacing:.09em;text-transform:uppercase}.trace-step-head strong{display:block;min-height:38px;margin-top:3px;font-size:12px;line-height:1.35}.trace-state{display:inline-flex;margin-top:7px;border:1px solid var(--line);border-radius:999px;padding:2px 6px;color:var(--muted);font-size:9px;font-style:normal;text-transform:uppercase}.trace-state.validated,.trace-state.completed{border-color:rgba(83,211,164,.46);color:var(--accent)}.trace-state.protected,.trace-state.inconclusive,.trace-state.not-performed{border-color:rgba(246,185,74,.5);color:#ffd083}.trace-content>p{min-height:96px;margin:10px 0;color:#b6c6d8;font-size:11px}.trace-tools{display:flex;gap:4px;flex-wrap:wrap}.trace-tools span{border-radius:6px;background:rgba(112,176,255,.11);color:#a8cdf7;padding:3px 6px;font-size:9px}.trace-evidence{display:grid;gap:4px;margin:9px 0 0;padding-left:15px;color:var(--muted);font-size:9px}.ai-section{border-color:rgba(167,120,255,.45);background:linear-gradient(150deg,rgba(34,27,67,.78),var(--panel) 45%)}.ai-section>summary{justify-content:flex-start}.ai-section>summary::after{margin-left:auto}.ai-badge{display:inline-flex;border:1px solid rgba(167,120,255,.55);border-radius:999px;background:rgba(167,120,255,.13);color:#c9abff;padding:2px 8px;font-size:9px;letter-spacing:.08em;text-transform:uppercase}.ai-badge.warning{border-color:rgba(246,185,74,.55);color:#ffd083}.ai-provenance{display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid rgba(167,120,255,.22);padding-bottom:11px;color:var(--muted);font-size:10px;text-transform:uppercase}.ai-headline{max-width:980px;margin:18px 0 12px;font-size:24px;line-height:1.25}.ai-brief-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.ai-brief-grid article{border:1px solid rgba(167,120,255,.2);border-radius:11px;background:rgba(7,20,33,.55);padding:13px}.ai-brief-grid h3{color:#c9abff}.ai-brief-grid p,.ai-brief-grid ol{margin:0;color:#c4d3e2}.ai-brief-grid ol{padding-left:20px}.ai-brief-grid li+li{margin-top:5px}.ai-limitations{border-left:3px solid #a778ff;margin:12px 0;padding:8px 11px;background:rgba(167,120,255,.08);color:var(--muted)}
@@ -620,6 +658,7 @@ main{width:100%;max-width:none;margin:0;padding:clamp(16px,2vw,38px) clamp(12px,
 <div class="callout"><strong>Scope guard:</strong> __SCOPE_NOTE__</div>
 __AI_PANEL__
 <details class="section" open id="key-findings-section"><summary>Key findings</summary><div class="section-body"><p class="section-note">__SUBDOMAIN_NOTE__ Highlights are grouped by validation state; complete evidence remains in JSON/CSV.</p>__ZONE_WARNING____KEY_FINDINGS__</div></details>
+<details class="section" open id="tool-findings-section"><summary>Findings by tool</summary><div class="section-body"><p class="section-note">Results are grouped by the collector or provider that produced them. Open a tool to inspect representative findings.</p>__TOOL_FINDINGS__</div></details>
 <details class="section" open id="origin-discovery-section"><summary>Automatic Origin discovery</summary><div class="section-body"><p class="section-note">__ORIGIN_SUMMARY__</p>__ORIGIN_HERO____ORIGIN_TRACE____ORIGIN_RANKING____ORIGIN_TABLE__</div></details>
 __REMEDIATION_PANEL__
 <details class="section" open id="graph-section"><summary>Interactive relationship explorer</summary><div class="section-body"><p class="section-note">Explore correlations between domains, addresses, infrastructure, technologies and evidence. Search or filter to focus a dense graph.</p><div class="graph-shell" id="graph-shell"><div class="graph-toolbar"><label class="graph-search"><span class="sr-only">Search graph nodes</span><input id="graph-search" type="search" placeholder="Find a domain, IP, ASN, technology…" autocomplete="off"><button class="graph-search-clear" id="clear-graph-search" type="button" title="Clear graph search" aria-label="Clear graph search">×</button></label><div class="graph-actions" role="toolbar" aria-label="Graph controls"><button class="graph-action origin-path-action" id="focus-origin" type="button" title="Focus the leading Origin IP and its attribution path">Origin path</button><div class="layout-switch" role="group" aria-label="Graph layout"><button class="layout-button" id="layout-network" type="button" aria-pressed="true">Network</button><button class="layout-button" id="layout-groups" type="button" aria-pressed="false">Groups</button></div><label class="graph-range-control spacing-control" title="Increase or reduce the distance between nodes"><span class="graph-range-label">Spacing</span><input class="spacing-range" id="graph-spacing" type="range" min="60" max="180" value="100" step="10" aria-label="Node spacing"><output class="spacing-value" id="graph-spacing-value">100%</output></label><button class="graph-action" id="zoom-out" type="button" title="Zoom out" aria-label="Zoom out">&minus;</button><label class="graph-range-control zoom-control" title="Graph zoom"><span class="sr-only">Zoom</span><input class="zoom-range" id="graph-zoom" type="range" min="25" max="260" value="100" step="5" aria-label="Graph zoom"><output class="zoom-value" id="graph-zoom-value">100%</output></label><button class="graph-action" id="zoom-in" type="button" title="Zoom in" aria-label="Zoom in">+</button><button class="graph-action" id="fit-graph" type="button" title="Fit all visible nodes">Fit</button><button class="graph-action" id="fullscreen-graph" type="button" title="Expand graph" aria-label="Expand graph">&#x26F6;</button><button class="graph-action" id="reset-graph" type="button" title="Reset filters, spacing, and layout">Reset</button></div></div><div class="graph-status-strip"><span class="graph-metric"><strong id="visible-node-count">0</strong> nodes</span><span class="graph-metric"><strong id="visible-edge-count">0</strong> relationships</span><span class="graph-metric"><strong id="visible-kind-count">0</strong> types</span><span class="graph-selection-status" id="graph-selection-status">Select a node to reveal its correlation path</span></div><div class="graph-layout"><div class="graph-canvas" id="graph-canvas"><svg id="relationship-graph" role="img" aria-labelledby="graph-title graph-description"><title id="graph-title">Reconnaissance relationship graph</title><desc id="graph-description">Interactive network of domains, addresses, infrastructure, technologies and evidence.</desc></svg><div class="graph-tooltip" id="graph-tooltip" role="tooltip"></div>__GRAPH_ORIGIN_ALERT__<div class="graph-help">Orange dashed relationships show the Origin attribution chain · wheel or +/− zooms · drag the background to pan</div></div><aside class="graph-inspector" id="graph-inspector" aria-live="polite"><div class="inspector-empty"><div><div class="inspector-empty-icon">◎</div><h3>Nothing selected</h3><p>Select a node to inspect its evidence and connected relationships.</p></div></div></aside></div><div class="legend" id="graph-legend" aria-label="Filter nodes by type"></div></div></div></details>
@@ -726,7 +765,7 @@ function positionTooltip(event){if(!tooltip.classList.contains("visible"))return
 function hideTooltip(){tooltip.classList.remove("visible")}
 nodeElements.forEach(({outer},id)=>{
   const node=byId.get(id);
-  outer.addEventListener("pointerenter",event=>{hoveredNode=node;renderInspector(node);showTooltip(node,event);refreshHighlight()});
+  outer.addEventListener("pointerenter",event=>{hoveredNode=node;showTooltip(node,event);refreshHighlight()});
   outer.addEventListener("pointermove",positionTooltip);
   outer.addEventListener("pointerleave",()=>{hoveredNode=null;hideTooltip();if(selectedNode)renderInspector(selectedNode);else emptyInspector();refreshHighlight()});
   outer.addEventListener("click",event=>{event.stopPropagation();if(dragMoved){dragMoved=false;return}selectNode(node)});
@@ -770,19 +809,19 @@ document.getElementById("zoom-in").addEventListener("click",()=>setZoom(view.sca
 const focusOrigin=document.getElementById("focus-origin"),primaryOrigin=nodes.find(node=>node.is_primary_origin);if(!primaryOrigin){focusOrigin.hidden=true}else{focusOrigin.addEventListener("click",()=>{activeKinds.add("origin_candidate");activeKinds.add("origin_technique");updateVisibility();setLayout("origin");setTimeout(()=>{selectNode(primaryOrigin);centerOn(primaryOrigin,1.1)},560)})}
 document.getElementById("fullscreen-graph").addEventListener("click",()=>{const expanded=shell.classList.toggle("is-expanded");document.body.classList.toggle("graph-expanded",expanded);document.getElementById("fullscreen-graph").title=expanded?"Exit expanded view":"Expand graph";setTimeout(fitGraph,80)});
 document.addEventListener("keydown",event=>{if(event.key==="Escape"&&shell.classList.contains("is-expanded")){shell.classList.remove("is-expanded");document.body.classList.remove("graph-expanded");setTimeout(fitGraph,80)}});
-document.getElementById("reset-graph").addEventListener("click",()=>{graphSearch.value="";query="";spacingSlider.value="100";spacingScale=1;spacingOutput.textContent="100%";activeKinds.clear();present.forEach(kind=>activeKinds.add(kind));legend.querySelectorAll(".legend-item").forEach(item=>item.setAttribute("aria-pressed","true"));clearSelection();updateVisibility();setLayout("network")});
-if(nodes.length){nodes.forEach(updateNode);updateEdges();updateVisibility();requestAnimationFrame(fitGraph)}else{const empty=makeSvg("text",{x:width/2,y:height/2,"text-anchor":"middle",class:"cluster-label"});empty.textContent="No relationship data was collected";viewport.append(empty);updateMetrics();applyView()}
+document.getElementById("reset-graph").addEventListener("click",()=>{graphSearch.value="";query="";spacingSlider.value="100";spacingScale=1;spacingOutput.textContent="100%";activeKinds.clear();present.forEach(kind=>activeKinds.add(kind));legend.querySelectorAll(".legend-item").forEach(item=>item.setAttribute("aria-pressed","true"));clearSelection();updateVisibility();setLayout(primaryOrigin?"origin":"network")});
+if(nodes.length){nodes.forEach(updateNode);updateEdges();updateVisibility();if(primaryOrigin){setLayout("origin",false)}requestAnimationFrame(fitGraph)}else{const empty=makeSvg("text",{x:width/2,y:height/2,"text-anchor":"middle",class:"cluster-label"});empty.textContent="No relationship data was collected";viewport.append(empty);updateMetrics();applyView()}
 })();
 </script></body></html>"""
     template = template.replace(
         "Explore correlations between domains, addresses, infrastructure, technologies and evidence. Search or filter to focus a dense graph.",
-        "Explore correlations between domains, addresses, infrastructure, technologies and evidence. Hover a node to preview it in the right panel; click to keep it selected.",
+        "Explore correlations between domains, addresses, infrastructure, technologies and evidence. Hover for a compact tooltip; click a node to open its detail card and inspector.",
     ).replace(
         "Select a node to reveal its correlation path",
-        "Hover or select a node to reveal its correlation path",
+        "Select a node to reveal its correlation path",
     ).replace(
         "Select a node to inspect its evidence and connected relationships.",
-        "Hover or select a node to inspect its evidence and connected relationships.",
+        "Select a node to inspect its evidence and connected relationships.",
     )
     replacements = {
         "__DOCUMENT_TITLE__": escape(f"{report_title} - {report_subject}"),
@@ -816,6 +855,7 @@ if(nodes.length){nodes.forEach(updateNode);updateEdges();updateVisibility();requ
         "__AI_PANEL__": ai_panel,
         "__REMEDIATION_PANEL__": remediation_panel,
         "__KEY_FINDINGS__": key_cards,
+        "__TOOL_FINDINGS__": tool_findings_panel,
         "__ZONE_WARNING__": zone_warning,
         **tables,
     }

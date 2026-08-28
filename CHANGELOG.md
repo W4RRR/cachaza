@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.4 - 2026-08-27
+
+- Added independent dnsenum and Fierce runtime controls with backward-compatible fallback.
+- Added a timestamped full execution log with command duration, timeout and return code.
+- Added findings-by-tool sections to HTML and PDF reports.
+- Made Origin-path layout the graph default, click-only node detail cards, and multi-Origin outcomes.
+- Added colored provider diagnostics and current Censys CenQL/organization validation.
+- Improved OpenRouter structured-output recovery and visible failure diagnostics.
+
 ## 1.0.2 - 2026-08-27
 
 - Added `-op` / `-professional-report` as a one-step OpenRouter-assisted executive reporting mode.

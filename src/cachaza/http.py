@@ -58,6 +58,16 @@ def request_bytes(
         except urllib.error.HTTPError as exc:
             last_error = exc
             status_code = exc.code
+            try:
+                raw_detail = exc.read(4096).decode("utf-8", errors="replace")
+                parsed_detail = json.loads(raw_detail)
+                if isinstance(parsed_detail, dict):
+                    detail = parsed_detail.get("error") or parsed_detail.get("message") or parsed_detail.get("detail")
+                    if isinstance(detail, dict):
+                        detail = detail.get("message") or detail.get("code") or detail
+                    exc.reason = f"{exc.reason}; provider detail: {str(detail)[:800]}" if detail else exc.reason
+            except (OSError, ValueError, TypeError):
+                pass
             transient = exc.code in {408, 425, 429} or exc.code >= 500
             if not transient:
                 break

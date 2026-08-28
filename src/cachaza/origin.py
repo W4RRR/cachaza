@@ -1919,6 +1919,19 @@ class OriginEngine:
             "candidates_actively_validated": len([item for item in selected if item.validation_status != "not_validated"]),
             "direct_requests_performed": budget.consumed,
             "origin_ip": highest.ip if highest else None,
+            "origin_ips": [item.ip for item in probable],
+            "origins": [
+                {
+                    "ip": item.ip,
+                    "origin_probability_percent": item.origin_probability_percent,
+                    "confidence_band": item.confidence_band,
+                    "classification": item.classification,
+                    "validation_status": item.validation_status,
+                    "evidence": [evidence.to_dict() for evidence in item.evidence],
+                    "independent_source_families": item.independent_source_families,
+                }
+                for item in probable
+            ],
             "origin_probability": highest.origin_probability if highest else 0.0,
             "origin_probability_percent": highest.origin_probability_percent if highest else 0,
             "confidence_band": highest.confidence_band if highest else "inconclusive",

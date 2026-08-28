@@ -214,18 +214,30 @@ def generate_ai_assistance(
             },
         },
         "provider": {"require_parameters": True},
+        "plugins": [{"id": "response-healing"}],
     }
-    response = request_json(
-        OPENROUTER_CHAT_URL,
-        method="POST",
-        timeout=config.timeout,
-        retries=1,
-        headers={
-            "Authorization": f"Bearer {config.api_key.strip()}",
-            "X-OpenRouter-Title": "Cachaza",
-        },
-        json_body=payload,
-    )
+    headers = {
+        "Authorization": f"Bearer {config.api_key.strip()}",
+        "X-OpenRouter-Title": "Professional Recon Report",
+    }
+    fallback_used = False
+    try:
+        response = request_json(
+            OPENROUTER_CHAT_URL, method="POST", timeout=config.timeout, retries=1,
+            headers=headers, json_body=payload,
+        )
+    except HttpError as exc:
+        # Some routes accept JSON mode but not strict JSON Schema. Retry once with
+        # the same model and evidence after an explicit capability/schema rejection.
+        if getattr(exc, "status_code", None) not in {400, 404, 422}:
+            raise
+        fallback_used = True
+        payload["response_format"] = {"type": "json_object"}
+        payload.pop("provider", None)
+        response = request_json(
+            OPENROUTER_CHAT_URL, method="POST", timeout=config.timeout, retries=1,
+            headers=headers, json_body=payload,
+        )
     try:
         content = response["choices"][0]["message"]["content"]
         decoded = json.loads(content) if isinstance(content, str) else content
@@ -238,6 +250,7 @@ def generate_ai_assistance(
         "provider": "OpenRouter",
         "model_requested": config.model,
         "model": str(response.get("model") or config.model),
+        "structured_output_mode": "json_object_fallback" if fallback_used else "json_schema",
         "generated_at": utc_now(),
         "usage": {
             key: int(usage[key])

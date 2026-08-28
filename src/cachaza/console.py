@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import sys
 import json
+from datetime import datetime, timezone
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
@@ -38,6 +40,22 @@ class Console:
     verbose: int = 0
     silent: bool = False
     color: bool = True
+    log_path: Path | None = None
+
+    def attach_log(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.log_path = path
+        self.log("execution log opened")
+
+    def log(self, message: str, *, source: str = "cachaza") -> None:
+        if self.log_path is None:
+            return
+        stamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+        with self.log_path.open("a", encoding="utf-8") as handle:
+            handle.write(f"{stamp} [{source}] {message}\n")
+
+    def paint(self, text: str, code: str) -> str:
+        return self._paint(text, code)
 
     def _paint(self, text: str, code: str) -> str:
         if not self.color:
@@ -60,10 +78,12 @@ class Console:
         print(self._paint(installed_version, "90"), file=sys.stderr)
 
     def info(self, message: str) -> None:
+        self.log(message, source="INFO")
         if not self.silent:
             print(self._paint("[+]", "32") + f" {message}", file=sys.stderr)
 
     def debug(self, message: str) -> None:
+        self.log(message, source="DEBUG")
         if not self.silent and self.verbose:
             print(self._paint("[*]", "36") + f" {message}", file=sys.stderr)
 
@@ -77,9 +97,10 @@ class Console:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         """Print every normalized finding at -v and its metadata at -vv."""
+        scope = "authorized" if in_scope else "candidate"
+        self.log(f"{kind}: {value} | source={source} | scope={scope}", source="FOUND")
         if self.silent or not self.verbose:
             return
-        scope = "authorized" if in_scope else "candidate"
         prefix = self._paint("[FOUND]", "36")
         print(
             f"{prefix} {kind}: {value} | source={source} | scope={scope}",
@@ -91,13 +112,17 @@ class Console:
 
     def stream(self, source: str, line: str) -> None:
         """Relay an external tool's live output only in verbose mode."""
+        if line:
+            self.log(line, source=source)
         if self.silent or not self.verbose or not line:
             return
         print(self._paint(f"[{source}]", "90") + f" {line}", file=sys.stderr)
 
     def warn(self, message: str) -> None:
+        self.log(message, source="WARNING")
         if not self.silent:
             print(self._paint("[!]", "33") + f" {message}", file=sys.stderr)
 
     def error(self, message: str) -> None:
+        self.log(message, source="ERROR")
         print(self._paint("[-]", "31") + f" {message}", file=sys.stderr)

@@ -145,10 +145,20 @@ class CommandRunner:
     ) -> CommandResult:
         clean_argv = enforce_tool_limits([str(part) for part in argv])
         shown = display_command(clean_argv)
-        self.console.debug(f"Running: {shown}")
+        effective_timeout = timeout or self.timeout
+        started = time.monotonic()
+        self.console.debug(f"Running: {shown} (timeout={effective_timeout}s)")
         if self.dry_run:
             result = CommandResult(clean_argv, 0, "", "", skipped=True)
-            self.history.append({"command": shown, "returncode": 0, "skipped": True})
+            self.console.log(
+                f"planned only returncode=0 duration=0.0s timeout={effective_timeout}s",
+                source=Path(clean_argv[0]).name,
+            )
+            self.history.append({
+                "command": shown, "returncode": 0, "skipped": True,
+                "duration_seconds": 0.0, "timeout_seconds": effective_timeout,
+                "timed_out": False,
+            })
             return result
         with self._process_slots:
             self._pace_start()
@@ -156,7 +166,7 @@ class CommandRunner:
                 result = self._run_streaming(
                     clean_argv,
                     input_text=input_text,
-                    timeout=timeout or self.timeout,
+                    timeout=effective_timeout,
                     cwd=cwd,
                     env=env,
                 )
@@ -164,13 +174,25 @@ class CommandRunner:
                 result = self._run_captured(
                     clean_argv,
                     input_text=input_text,
-                    timeout=timeout or self.timeout,
+                    timeout=effective_timeout,
                     cwd=cwd,
                     env=env,
                 )
-        self.history.append(
-            {"command": shown, "returncode": result.returncode, "skipped": result.skipped}
+        duration = round(time.monotonic() - started, 3)
+        if not (self.console.verbose and not self.console.silent):
+            for line in result.stdout.splitlines():
+                self.console.log(line, source=Path(clean_argv[0]).name)
+            for line in result.stderr.splitlines():
+                self.console.log(line, source=f"{Path(clean_argv[0]).name}:stderr")
+        self.console.log(
+            f"completed returncode={result.returncode} duration={duration}s timeout={effective_timeout}s",
+            source=Path(clean_argv[0]).name,
         )
+        self.history.append({
+            "command": shown, "returncode": result.returncode, "skipped": result.skipped,
+            "duration_seconds": duration, "timeout_seconds": effective_timeout,
+            "timed_out": result.returncode == 124,
+        })
         return result
 
     def _run_captured(

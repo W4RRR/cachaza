@@ -8,6 +8,7 @@ import os
 import socket
 import re
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from html.parser import HTMLParser
 from pathlib import Path
@@ -466,12 +467,10 @@ def certspotter_domains(
 
 
 def censys_query(domain: str) -> str:
-    escaped = re.escape(domain.lower().rstrip("."))
-    suffix = rf"^([^.]+\.)*{escaped}$"
-    return (
-        f"(web.hostname=~`{suffix}` or host.dns.names=~`{suffix}` "
-        f"or cert.names=~`{suffix}`)"
-    )
+    # CenQL's domain-aware analyzers cover the root and subdomains without the
+    # costly regex form, which also avoids route/plan-specific 422 responses.
+    value = domain.lower().rstrip(".").replace('"', '\\"')
+    return f'(web.hostname:"{value}" or host.dns.names:"{value}" or cert.names:"{value}")'
 
 
 def _walk_strings(value: Any):
@@ -534,6 +533,13 @@ def censys_search(
         )
     params: dict[str, str | int] | None = None
     if organization_id:
+        try:
+            uuid.UUID(organization_id)
+        except ValueError as exc:
+            raise HttpError(
+                "CENSYS_ORG_ID must be a UUID copied from the Censys organization context",
+                status_code=422,
+            ) from exc
         params = {"organization_id": organization_id}
     payload = request_json(
         CENSYS_SEARCH,
