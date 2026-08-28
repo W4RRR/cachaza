@@ -74,7 +74,7 @@ class AIReportingTests(unittest.TestCase):
     def test_openrouter_generates_validated_structured_narrative(self) -> None:
         narrative = {
             "headline": "Direct origin exposure requires remediation",
-            "executive_summary": "A concise summary.",
+            "executive_summary": ["Summary one.", "Summary two.", "Summary three."],
             "origin_assessment": "The direct path was validated.",
             "business_impact": "Edge controls may be circumvented.",
             "recommended_actions": ["Restrict ingress", "Rotate exposed services", "Retest"],
@@ -91,6 +91,7 @@ class AIReportingTests(unittest.TestCase):
             )
         self.assertEqual(result["status"], "generated")
         self.assertEqual(result["structured_output_mode"], "json_schema")
+        self.assertEqual(result["narrative"]["executive_summary"][0], "Summary one.")
         self.assertEqual(result["narrative"]["recommended_actions"][0], "Restrict ingress")
         kwargs = request.call_args.kwargs
         self.assertEqual(kwargs["headers"]["Authorization"], "Bearer secret")
@@ -102,6 +103,24 @@ class AIReportingTests(unittest.TestCase):
         self.assertEqual(kwargs["json_body"]["plugins"], [{"id": "response-healing"}])
         self.assertIn("origin_remediation", serialized_payload)
         self.assertIn("do not name the underlying collection product", serialized_payload)
+        self.assertIn("including headings and recommended_actions", serialized_payload)
+
+    def test_legacy_string_summary_is_normalized_into_bullets(self) -> None:
+        narrative = {
+            "headline": "Assessment",
+            "executive_summary": "First point. Second point. Third point.",
+            "origin_assessment": "Assessment.",
+            "business_impact": "Impact.",
+            "recommended_actions": ["One", "Two", "Three"],
+            "limitations": "Limitations.",
+        }
+        response = {"choices": [{"message": {"content": json.dumps(narrative)}}]}
+        with patch("cachaza.ai_reporting.request_json", return_value=response):
+            result = generate_ai_assistance(self._data(), AIReportConfig(api_key="secret"))
+        self.assertEqual(
+            result["narrative"]["executive_summary"],
+            ["First point.", "Second point.", "Third point."],
+        )
 
     def test_invalid_openrouter_response_is_rejected(self) -> None:
         with patch(

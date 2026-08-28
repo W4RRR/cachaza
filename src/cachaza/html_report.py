@@ -267,24 +267,52 @@ def render_html(data: dict[str, Any]) -> str:
     if isinstance(ai_assistance, dict):
         narrative = ai_assistance.get("narrative", {})
         if ai_assistance.get("status") == "generated" and isinstance(narrative, dict):
+            ai_spanish = ai_assistance.get("language") == "es"
+            summary_value = narrative.get("executive_summary", [])
+            if isinstance(summary_value, list):
+                summary_points = [
+                    str(value).strip() for value in summary_value if str(value).strip()
+                ]
+            else:
+                summary_points = [
+                    value.strip()
+                    for value in re.split(
+                        r"(?:\r?\n)+|(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚÜÑ0-9])",
+                        str(summary_value),
+                    )
+                    if value.strip()
+                ]
+            summary_html = "".join(
+                f"<li>{escape(value)}</li>" for value in summary_points[:6]
+            )
             actions = "".join(
                 f'<li>{escape(str(value))}</li>'
                 for value in narrative.get("recommended_actions", []) if str(value).strip()
             )
+            labels = {
+                "brief": "Resumen ejecutivo asistido por IA" if ai_spanish else "AI-assisted executive brief",
+                "model": "Modelo editorial" if ai_spanish else "Editorial model",
+                "evidence": "La evidencia y las puntuaciones siguen siendo deterministas" if ai_spanish else "Evidence and scores remain deterministic",
+                "summary": "Resumen ejecutivo" if ai_spanish else "Executive summary",
+                "origin": "Evaluación del origen" if ai_spanish else "Origin assessment",
+                "impact": "Impacto empresarial" if ai_spanish else "Business impact",
+                "actions": "Acciones recomendadas" if ai_spanish else "Recommended actions",
+                "limitations": "Limitaciones" if ai_spanish else "Limitations",
+            }
             ai_panel = (
                 '<details class="section ai-section" open id="ai-executive-section">'
-                '<summary>AI-assisted executive brief <span class="ai-badge">OpenRouter</span></summary>'
+                f'<summary>{labels["brief"]} <span class="ai-badge">OpenRouter</span></summary>'
                 '<div class="section-body"><div class="ai-provenance">'
-                f'<span>Editorial model: {escape(str(ai_assistance.get("model") or ai_assistance.get("model_requested") or "unknown"))}</span>'
-                '<span>Evidence and scores remain deterministic</span></div>'
+                f'<span>{labels["model"]}: {escape(str(ai_assistance.get("model") or ai_assistance.get("model_requested") or "unknown"))}</span>'
+                f'<span>{labels["evidence"]}</span></div>'
                 f'<h2 class="ai-headline">{escape(str(narrative.get("headline") or "Executive assessment"))}</h2>'
                 '<div class="ai-brief-grid">'
-                f'<article><h3>Executive summary</h3><p>{escape(str(narrative.get("executive_summary") or ""))}</p></article>'
-                f'<article><h3>Origin assessment</h3><p>{escape(str(narrative.get("origin_assessment") or ""))}</p></article>'
-                f'<article><h3>Business impact</h3><p>{escape(str(narrative.get("business_impact") or ""))}</p></article>'
-                f'<article><h3>Recommended actions</h3><ol>{actions}</ol></article>'
+                f'<article class="ai-summary"><h3>{labels["summary"]}</h3><ul class="ai-summary-list">{summary_html}</ul></article>'
+                f'<article><h3>{labels["origin"]}</h3><p>{escape(str(narrative.get("origin_assessment") or ""))}</p></article>'
+                f'<article><h3>{labels["impact"]}</h3><p>{escape(str(narrative.get("business_impact") or ""))}</p></article>'
+                f'<article><h3>{labels["actions"]}</h3><ol>{actions}</ol></article>'
                 '</div>'
-                f'<p class="ai-limitations"><strong>Limitations:</strong> {escape(str(narrative.get("limitations") or ""))}</p>'
+                f'<p class="ai-limitations"><strong>{labels["limitations"]}:</strong> {escape(str(narrative.get("limitations") or ""))}</p>'
                 f'<p class="section-note">{escape(str(ai_assistance.get("notice") or ""))}</p>'
                 '</div></details>'
             )
@@ -653,6 +681,7 @@ main{width:100%;max-width:none;margin:0;padding:clamp(16px,2vw,38px) clamp(12px,
 @media(prefers-color-scheme:light){:root{--bg:#f5f8fc;--panel:#fff;--soft:#edf4fb;--line:#c8d5e4;--text:#102238;--muted:#526a83;--accent:#087a5b;--blue:#176fc1}main>header{background:linear-gradient(135deg,#e8f2ff,#f7fbff)}.professional main>header{background:linear-gradient(118deg,#e8f3fb,#eef8f6)}.callout{background:#eaf8f1}.key-card,.remediation-card{background:#f8fbff}.waf-entry,.key-list-item,.subdomain-item{background:#fff}.origin-chain-shell{background:radial-gradient(circle at 8% 10%,#dcecf9,transparent 32%),#f7fbff}.origin-chain-node{background:#fff;box-shadow:0 9px 24px rgba(56,90,122,.12)}.origin-chain-node>strong{color:#102238}.origin-chain-result{background:#fff8e9}.origin-chain-result.critical{background:#fff0f2}.origin-chain-result code{color:#8f2530}.graph-shell{background:#f7fbff;box-shadow:0 18px 50px rgba(56,90,122,.18)}.graph-toolbar,.graph-status-strip,.legend{background:rgba(240,247,253,.94)}.graph-search input,.graph-action,.layout-switch,.graph-range-control,.legend-item{background:#fff;color:var(--text)}.graph-canvas{background:radial-gradient(circle at 20% 10%,#d9ebfa,transparent 38%),#f7fbff}.graph-inspector{background:#f0f6fc}.graph-help,.graph-tooltip{background:rgba(255,255,255,.96);color:var(--muted)}.tooltip-title{color:var(--text)}.node-info-bg{fill:rgba(255,255,255,.97);stroke:#9bb4cc}.node-title{fill:#102238}.node-meta{fill:#526a83}.edge-label{fill:#284b6c;stroke:#f7fbff}.cluster-label{fill:#526a83;stroke:#f7fbff}.relation-item{background:#fff}.source-pill{background:#e1edf8;color:#34506b}}
 .node-position{transition:none!important}.node-count-bg{fill:#071421;stroke:rgba(255,255,255,.8);stroke-width:1.2;vector-effect:non-scaling-stroke}.node-count{fill:#fff;font-size:7px;font-weight:900;text-anchor:middle;dominant-baseline:central;pointer-events:none}.zoomed-out .node-card.related .node-info{opacity:0}
 @media(prefers-color-scheme:light){.zone-warning{background:#fff0f1;color:#8f2530}}
+.ai-brief-grid{align-items:start}.ai-brief-grid article{min-width:0;height:auto;overflow:visible;padding:15px}.ai-brief-grid p,.ai-brief-grid ol,.ai-summary-list{margin:0;color:#c4d3e2;overflow-wrap:anywhere}.ai-brief-grid ol,.ai-summary-list{padding-left:21px}.ai-brief-grid li+li,.ai-summary-list li+li{margin-top:8px}.ai-summary-list li::marker{color:#a778ff}.ai-summary-list li{padding-left:3px;line-height:1.55}
 </style></head><body class="__BODY_CLASS__"><main>
 <header class="report-header"><span class="classification">Executive assessment</span><div class="eyebrow">__REPORT_KICKER__</div><div class="report-subject">Report prepared for <strong>__REPORT_SUBJECT__</strong></div><h1>__REPORT_TITLE__</h1><p class="muted report-meta">Generated __GENERATED__ &middot; version __VERSION__</p><div class="stats" aria-label="Finding counts. Select a type to filter the evidence below.">__COUNTS__</div></header>
 <div class="callout"><strong>Scope guard:</strong> __SCOPE_NOTE__</div>
@@ -710,18 +739,19 @@ function networkLayout(){
   return new Map(nodes.map(node=>[node.id,{x:node.x,y:node.y}]))
 }
 function groupedLayout(){
-  const positions=new Map(),columns=Math.min(3,Math.max(1,Math.ceil(Math.sqrt(present.length)))),cellWidth=560,cellHeight=510;
-  present.forEach((kind,groupIndex)=>{const group=[...(groups.get(kind)||[])].sort((a,b)=>b.degree-a.degree||a.label.localeCompare(b.label)),column=groupIndex%columns,row=Math.floor(groupIndex/columns),center={x:300+column*cellWidth,y:285+row*cellHeight};group.forEach((node,index)=>{if(index===0){positions.set(node.id,{...center});return}const angle=index*2.399963229728653,radius=52+Math.sqrt(index)*27;positions.set(node.id,{x:center.x+Math.cos(angle)*radius,y:center.y+Math.sin(angle)*radius})})});
+  const positions=new Map(),count=Math.max(1,present.length),radiusX=width*.34,radiusY=height*.31;
+  present.forEach((kind,groupIndex)=>{const group=[...(groups.get(kind)||[])].sort((a,b)=>b.degree-a.degree||a.label.localeCompare(b.label)),groupAngle=groupIndex/count*Math.PI*2-Math.PI/2,center={x:width/2+Math.cos(groupAngle)*radiusX,y:height/2+Math.sin(groupAngle)*radiusY};group.forEach((node,index)=>{if(index===0){positions.set(node.id,{...center});return}const angle=index*2.399963229728653+groupAngle,radius=48+Math.sqrt(index)*25;positions.set(node.id,{x:center.x+Math.cos(angle)*radius,y:center.y+Math.sin(angle)*radius})})});
   return positions
 }
-function originPathLayout(){
-  const positions=new Map(),pathNodes=nodes.filter(node=>node.is_origin_path||node.is_primary_origin).sort((a,b)=>(a.stage_number||999)-(b.stage_number||999)),otherNodes=nodes.filter(node=>!pathNodes.includes(node));
-  pathNodes.forEach((node,index)=>positions.set(node.id,{x:245+index*260,y:height*.34}));
-  const columns=Math.max(1,Math.ceil(Math.sqrt(otherNodes.length)));
-  otherNodes.forEach((node,index)=>{const column=index%columns,row=Math.floor(index/columns);positions.set(node.id,{x:130+column*135,y:height*.63+row*95})});
+function originPathLayout(basePositions){
+  const positions=new Map(),pathNodes=nodes.filter(node=>node.is_origin_path||node.is_primary_origin).sort((a,b)=>(a.stage_number??999)-(b.stage_number??999)),otherNodes=nodes.filter(node=>!pathNodes.includes(node));
+  const pathSpan=Math.min(width-320,Math.max(0,pathNodes.length-1)*245),pathStep=pathNodes.length>1?pathSpan/(pathNodes.length-1):0,pathStart=(width-pathSpan)/2;
+  pathNodes.forEach((node,index)=>positions.set(node.id,{x:pathStart+index*pathStep,y:height*.2}));
+  const base=otherNodes.map(node=>basePositions.get(node.id)).filter(Boolean),minX=Math.min(...base.map(point=>point.x),0),maxX=Math.max(...base.map(point=>point.x),1),minY=Math.min(...base.map(point=>point.y),0),maxY=Math.max(...base.map(point=>point.y),1),spanX=Math.max(1,maxX-minX),spanY=Math.max(1,maxY-minY);
+  otherNodes.forEach(node=>{const point=basePositions.get(node.id)||{x:width/2,y:height/2};positions.set(node.id,{x:135+(point.x-minX)/spanX*(width-270),y:height*.43+(point.y-minY)/spanY*(height*.48)})});
   return positions
 }
-const networkPositions=networkLayout(),groupPositions=groupedLayout(),originPositions=originPathLayout(),clusterGuides=[];
+const networkPositions=networkLayout(),groupPositions=groupedLayout(),originPositions=originPathLayout(networkPositions),clusterGuides=[];
 let spacingScale=1;
 function scalePosition(point){return{x:width/2+(point.x-width/2)*spacingScale,y:height/2+(point.y-height/2)*spacingScale}}
 function layoutPositions(name=currentLayout){const source=name==="groups"?groupPositions:name==="origin"?originPositions:networkPositions;return new Map([...source].map(([id,point])=>[id,scalePosition(point)]))}
@@ -765,7 +795,7 @@ function positionTooltip(event){if(!tooltip.classList.contains("visible"))return
 function hideTooltip(){tooltip.classList.remove("visible")}
 nodeElements.forEach(({outer},id)=>{
   const node=byId.get(id);
-  outer.addEventListener("pointerenter",event=>{hoveredNode=node;showTooltip(node,event);refreshHighlight()});
+  outer.addEventListener("pointerenter",event=>{hoveredNode=node;showTooltip(node,event);renderInspector(node);refreshHighlight()});
   outer.addEventListener("pointermove",positionTooltip);
   outer.addEventListener("pointerleave",()=>{hoveredNode=null;hideTooltip();if(selectedNode)renderInspector(selectedNode);else emptyInspector();refreshHighlight()});
   outer.addEventListener("click",event=>{event.stopPropagation();if(dragMoved){dragMoved=false;return}selectNode(node)});

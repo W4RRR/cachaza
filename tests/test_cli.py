@@ -84,7 +84,11 @@ class CliTests(unittest.TestCase):
     def test_op_generates_white_label_html_pdf_and_uses_openrouter(self) -> None:
         narrative = {
             "headline": "Executive exposure assessment",
-            "executive_summary": "Evidence-backed summary for leadership.",
+            "executive_summary": [
+                "Evidence-backed summary for leadership.",
+                "Direct reachability was assessed.",
+                "Remediation has been prioritized.",
+            ],
             "origin_assessment": "No direct-path claim without validation.",
             "business_impact": "The edge boundary should remain the only public path.",
             "recommended_actions": [
@@ -97,6 +101,7 @@ class CliTests(unittest.TestCase):
         assistance = {
             "status": "generated",
             "provider": "OpenRouter",
+            "language": "es",
             "model": "openai/test-model",
             "narrative": narrative,
             "notice": "AI prose is editorial; deterministic evidence remains authoritative.",
@@ -131,6 +136,9 @@ class CliTests(unittest.TestCase):
             html = (root / "report.html").read_text(encoding="utf-8")
             self.assertIn("Professional Recon Report", html)
             self.assertIn("Report prepared for <strong>example.com</strong>", html)
+            self.assertIn("Resumen ejecutivo", html)
+            self.assertIn('class="ai-summary-list"', html)
+            self.assertIn("Acciones recomendadas", html)
             self.assertNotIn("cachaza", html.casefold())
             report = json.loads((root / "report.json").read_text(encoding="utf-8"))
             self.assertEqual(report["presentation"]["mode"], "professional")

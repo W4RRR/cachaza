@@ -7,6 +7,7 @@ source of truth for every address, score, relationship, and evidence record.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -33,7 +34,12 @@ NARRATIVE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "headline": {"type": "string"},
-        "executive_summary": {"type": "string"},
+        "executive_summary": {
+            "type": "array",
+            "items": {"type": "string", "maxLength": 420},
+            "minItems": 3,
+            "maxItems": 6,
+        },
         "origin_assessment": {"type": "string"},
         "business_impact": {"type": "string"},
         "recommended_actions": {
@@ -60,6 +66,17 @@ def _bounded_strings(values: Any, *, limit: int = 12) -> list[str]:
     if not isinstance(values, list):
         return []
     return [str(value)[:500] for value in values[:limit] if str(value).strip()]
+
+
+def _summary_points(value: Any, *, limit: int = 6) -> list[str]:
+    """Normalize new bullet summaries while accepting legacy string responses."""
+
+    if isinstance(value, list):
+        return [str(item).strip()[:420] for item in value[:limit] if str(item).strip()]
+    if not isinstance(value, str) or not value.strip():
+        return []
+    parts = re.split(r"(?:\r?\n)+|(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚÜÑ0-9])", value.strip())
+    return [part.strip()[:420] for part in parts[:limit] if part.strip()]
 
 
 def build_report_digest(data: dict[str, Any]) -> dict[str, Any]:
@@ -154,15 +171,15 @@ def _validated_narrative(value: Any) -> dict[str, Any]:
         raise ValueError(f"OpenRouter narrative is missing: {', '.join(missing)}")
     narrative = {
         "headline": str(value["headline"]).strip()[:220],
-        "executive_summary": str(value["executive_summary"]).strip()[:2_500],
+        "executive_summary": _summary_points(value["executive_summary"]),
         "origin_assessment": str(value["origin_assessment"]).strip()[:2_500],
         "business_impact": str(value["business_impact"]).strip()[:2_500],
         "recommended_actions": _bounded_strings(value["recommended_actions"], limit=6),
         "limitations": str(value["limitations"]).strip()[:2_000],
     }
     if not all(narrative[name] for name in (
-        "headline", "executive_summary", "origin_assessment", "business_impact", "limitations"
-    )) or len(narrative["recommended_actions"]) < 3:
+        "headline", "origin_assessment", "business_impact", "limitations"
+    )) or len(narrative["executive_summary"]) < 3 or len(narrative["recommended_actions"]) < 3:
         raise ValueError("OpenRouter returned an incomplete narrative")
     return narrative
 
@@ -188,7 +205,12 @@ def generate_ai_assistance(
                     "tools, validation, ownership, impact, or certainty. Preserve the distinction "
                     "between heuristic correlation and proof. If attribution_status is not "
                     "direct_path_validated, do not claim that the CDN/WAF was bypassed. Keep the "
-                    "tone concise, neutral, and decision-oriented. Recommended actions must "
+                    "tone concise, neutral, and decision-oriented. Return executive_summary as "
+                    "3 to 6 short, non-redundant bullets rather than a paragraph. Every output "
+                    f"field, including headings and recommended_actions, must be in {language}; "
+                    "translate supplied control titles and actions instead of copying them in a "
+                    "different language, while preserving P0/P1/P2 priority codes and technical "
+                    "terms. Recommended actions must "
                     "prioritize the supplied origin_remediation controls and closure tests; do "
                     "not invent vendor features or claim that an unverified fix is complete. If "
                     "professional_white_label is true, do not name the underlying collection "
@@ -259,6 +281,7 @@ def generate_ai_assistance(
     return {
         "status": "generated",
         "provider": "OpenRouter",
+        "language": config.language,
         "model_requested": config.model,
         "model": str(response.get("model") or config.model),
         "structured_output_mode": "json_object_fallback" if fallback_used else "json_schema",
@@ -270,7 +293,10 @@ def generate_ai_assistance(
         },
         "narrative": narrative,
         "notice": (
-            "AI-assisted prose is editorial only. Cachaza's normalized evidence, "
+            "El texto asistido por IA es únicamente editorial. La evidencia normalizada, "
+            "la puntuación de origen y la trazabilidad determinista siguen siendo la referencia."
+            if config.language == "es"
+            else "AI-assisted prose is editorial only. Cachaza's normalized evidence, "
             "origin score, and deterministic attribution trace remain authoritative."
         ),
     }

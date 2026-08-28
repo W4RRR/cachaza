@@ -2272,29 +2272,44 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
     ai_assistance = data.get("ai_assistance", {})
     narrative = ai_assistance.get("narrative", {}) if isinstance(ai_assistance, dict) else {}
     if ai_assistance.get("status") == "generated" and isinstance(narrative, dict):
+        ai_spanish = ai_assistance.get("language") == "es"
+        summary_points = narrative.get("executive_summary", [])
+        if not isinstance(summary_points, list):
+            summary_points = [summary_points] if str(summary_points).strip() else []
         ai_story = [
             PageBreak(),
-            Paragraph("AI-assisted executive brief", styles["ReportTitle"]),
+            Paragraph(
+                "Resumen ejecutivo asistido por IA" if ai_spanish else "AI-assisted executive brief",
+                styles["ReportTitle"],
+            ),
             Paragraph(
                 _pdf_text(
-                    f"Editorial model: {ai_assistance.get('model') or ai_assistance.get('model_requested', 'unknown')}. "
-                    "Evidence and scores remain deterministic."
+                    (
+                        f"Modelo editorial: {ai_assistance.get('model') or ai_assistance.get('model_requested', 'desconocido')}. "
+                        "La evidencia y las puntuaciones siguen siendo deterministas."
+                        if ai_spanish
+                        else f"Editorial model: {ai_assistance.get('model') or ai_assistance.get('model_requested', 'unknown')}. "
+                        "Evidence and scores remain deterministic."
+                    )
                 ),
                 styles["Kicker"],
             ),
             Paragraph(_pdf_text(narrative.get("headline", "Executive assessment")), styles["Section"]),
-            Paragraph("Executive summary", styles["Section"]),
-            Paragraph(_pdf_text(narrative.get("executive_summary", "")), styles["AIBody"]),
-            Paragraph("Origin assessment", styles["Section"]),
+            Paragraph("Resumen ejecutivo" if ai_spanish else "Executive summary", styles["Section"]),
+            *[
+                Paragraph(_pdf_text(point), styles["AIBody"], bulletText="•")
+                for point in summary_points
+            ],
+            Paragraph("Evaluación del origen" if ai_spanish else "Origin assessment", styles["Section"]),
             Paragraph(_pdf_text(narrative.get("origin_assessment", "")), styles["AIBody"]),
-            Paragraph("Business impact", styles["Section"]),
+            Paragraph("Impacto empresarial" if ai_spanish else "Business impact", styles["Section"]),
             Paragraph(_pdf_text(narrative.get("business_impact", "")), styles["AIBody"]),
-            Paragraph("Recommended actions", styles["Section"]),
+            Paragraph("Acciones recomendadas" if ai_spanish else "Recommended actions", styles["Section"]),
             *[
                 Paragraph(f"{index}. {_pdf_text(action)}", styles["AIBody"])
                 for index, action in enumerate(narrative.get("recommended_actions", []), start=1)
             ],
-            Paragraph("Limitations", styles["Section"]),
+            Paragraph("Limitaciones" if ai_spanish else "Limitations", styles["Section"]),
             Paragraph(_pdf_text(narrative.get("limitations", "")), styles["BodySmall"]),
             Paragraph(_pdf_text(ai_assistance.get("notice", "")), styles["Warning"]),
         ]
@@ -2633,6 +2648,7 @@ def export_reports(
             data["ai_assistance"] = {
                 "status": "error",
                 "provider": "OpenRouter",
+                "language": ai_config.language,
                 "model_requested": ai_config.model,
                 "error": str(exc),
                 "notice": (

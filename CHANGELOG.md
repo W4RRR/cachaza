@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.6 - 2026-08-28
+
+- Changed AI executive summaries to concise bullet highlights in HTML and PDF.
+- Enforced the selected AI language across narrative fields, action recommendations and report labels.
+- Replaced the gridded Origin overview with an organic, type-grouped supporting-node layout.
+- Made graph hover update the evidence and relationship inspector while preserving click selection.
+
 ## 1.0.5 - 2026-08-28
 
 - Fixed Python 3.13 compatibility when extracting provider details from HTTP errors.

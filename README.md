@@ -23,7 +23,7 @@ _________     _____  _________   ___ ___    _____  __________  _____
  \______  /\____|__  /\______  /\___|_  /\____|__  /_______ \____|__  /
         \/         \/        \/       \/         \/        \/       \/
                    github.com/W4RRR/cachaza by W4RRR
-                                 v1.0.5
+                                 v1.0.6
 ```
 
 Cachaza turns an explicitly defined domain or network scope into a reproducible reconnaissance workspace. It collects passive intelligence first, applies scope decisions to every observation, and requires explicit authorization before direct-contact stages run.
@@ -745,14 +745,14 @@ cachaza -update
 
 Both commands are equivalent.
 
-Once v1.0.5 has been merged into `main` and the `v1.0.5` Release has been published from that same commit, the normal upgrade is:
+Once v1.0.6 has been merged into `main` and the `v1.0.6` Release has been published from that same commit, the normal upgrade is:
 
 ```bash
 cachaza -up
 cachaza -version
 ```
 
-The second command must print `cachaza 1.0.5`.
+The second command must print `cachaza 1.0.6`.
 
 ### Publishing a GitHub Release
 
@@ -763,8 +763,8 @@ Create the tag only after the release pull request has been merged into `main`:
 ```bash
 git switch main
 git pull --ff-only origin main
-git tag -a v1.0.5 -m "Cachaza v1.0.5"
-git push origin v1.0.5
+git tag -a v1.0.6 -m "Cachaza v1.0.6"
+git push origin v1.0.6
 ```
 
 The Release must be public—not a draft or prerelease—so `/releases/latest` and `cachaza -up` can discover it.
