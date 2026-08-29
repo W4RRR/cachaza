@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.8 - 2026-08-28
+
+- Added tolerant, evidence-safe decoding for OpenRouter JSON returned in Markdown fences, mixed text, segmented content, parsed objects, wrapper objects and localized field names.
+- Added one bounded semantic repair request when a successful OpenRouter response does not satisfy the executive narrative contract.
+- Added safe response-shape diagnostics without retaining model prose, credentials or report evidence.
+- Made OpenRouter console failures point to `rest/ai/reporting-status.json` for actionable diagnostics.
+
 ## 1.0.7 - 2026-08-28
 
 - Made `-resume` idempotent for output handling: missing or empty directories are created as new workspaces, while compatible existing workspaces continue from checkpoints.

@@ -126,9 +126,124 @@ class AIReportingTests(unittest.TestCase):
         with patch(
             "cachaza.ai_reporting.request_json",
             return_value={"choices": [{"message": {"content": "not json"}}]},
-        ):
-            with self.assertRaises(HttpError):
+        ) as request:
+            with self.assertRaises(HttpError) as caught:
                 generate_ai_assistance(self._data(), AIReportConfig(api_key="secret"))
+        self.assertEqual(request.call_count, 2)
+        self.assertIn("after one semantic repair attempt", str(caught.exception))
+        self.assertIn('"content_type": "str"', str(caught.exception))
+        self.assertNotIn("not json", str(caught.exception))
+
+    def test_markdown_wrapped_spanish_aliases_are_normalized(self) -> None:
+        narrative = {
+            "Título": "Exposición del origen",
+            "Resumen ejecutivo": ["Uno.", "Dos.", "Tres."],
+            "Evaluación del origen": "La ruta fue validada.",
+            "Impacto empresarial": "Aumenta el riesgo perimetral.",
+            "Acciones recomendadas": ["Contener", "Autenticar", "Revalidar"],
+            "Limitaciones": "La atribución no prueba propiedad.",
+        }
+        response = {
+            "model": "test/model",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "content": "```json\n" + json.dumps(narrative, ensure_ascii=False) + "\n```"
+                    },
+                }
+            ],
+        }
+        with patch("cachaza.ai_reporting.request_json", return_value=response) as request:
+            result = generate_ai_assistance(
+                self._data(), AIReportConfig(api_key="secret", language="es")
+            )
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(result["narrative"]["headline"], "Exposición del origen")
+        self.assertEqual(result["narrative"]["recommended_actions"][0], "Contener")
+        self.assertEqual(result["response_diagnostic"]["finish_reason"], "stop")
+
+    def test_segmented_message_content_is_joined_before_decoding(self) -> None:
+        narrative = {
+            "headline": "Assessment",
+            "executive_summary": ["One.", "Two.", "Three."],
+            "origin_assessment": "Assessment.",
+            "business_impact": "Impact.",
+            "recommended_actions": ["Contain", "Authenticate", "Retest"],
+            "limitations": "Limitations.",
+        }
+        encoded = json.dumps(narrative)
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "content": [
+                            {"type": "text", "text": encoded[:40]},
+                            {"type": "text", "text": encoded[40:]},
+                        ]
+                    }
+                }
+            ]
+        }
+        with patch("cachaza.ai_reporting.request_json", return_value=response):
+            result = generate_ai_assistance(self._data(), AIReportConfig(api_key="secret"))
+        self.assertEqual(result["narrative"]["headline"], "Assessment")
+        self.assertEqual(result["response_diagnostic"]["content_type"], "list")
+
+    def test_mixed_text_before_json_is_safely_extracted(self) -> None:
+        narrative = {
+            "headline": "Assessment",
+            "executive_summary": ["One.", "Two.", "Three."],
+            "origin_assessment": "Assessment.",
+            "business_impact": "Impact.",
+            "recommended_actions": ["Contain", "Authenticate", "Retest"],
+            "limitations": "Limitations.",
+        }
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "Structured result follows:\n" + json.dumps(narrative)
+                    }
+                }
+            ]
+        }
+        with patch("cachaza.ai_reporting.request_json", return_value=response) as request:
+            result = generate_ai_assistance(self._data(), AIReportConfig(api_key="secret"))
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(result["narrative"]["headline"], "Assessment")
+
+    def test_invalid_first_narrative_gets_one_semantic_repair_attempt(self) -> None:
+        repaired = {
+            "headline": "Assessment",
+            "executive_summary": ["One.", "Two.", "Three."],
+            "origin_assessment": "Assessment.",
+            "business_impact": "Impact.",
+            "recommended_actions": ["Contain", "Authenticate", "Retest"],
+            "limitations": "Limitations.",
+        }
+        responses = [
+            {
+                "choices": [{"message": {"content": "{}"}}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110},
+            },
+            {
+                "choices": [{"message": {"content": json.dumps(repaired)}}],
+                "usage": {"prompt_tokens": 120, "completion_tokens": 30, "total_tokens": 150},
+            },
+        ]
+        with patch("cachaza.ai_reporting.request_json", side_effect=responses) as request:
+            result = generate_ai_assistance(self._data(), AIReportConfig(api_key="secret"))
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(result["structured_output_mode"], "json_object_semantic_repair")
+        self.assertEqual(
+            result["usage"],
+            {"prompt_tokens": 220, "completion_tokens": 40, "total_tokens": 260},
+        )
+        repair_payload = request.call_args_list[1].kwargs["json_body"]
+        self.assertEqual(repair_payload["temperature"], 0)
+        self.assertEqual(repair_payload["response_format"], {"type": "json_object"})
+        self.assertNotIn("provider", repair_payload)
 
     def test_openrouter_404_after_fallback_has_actionable_model_diagnostic(self) -> None:
         with patch(

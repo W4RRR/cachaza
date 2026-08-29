@@ -2555,7 +2555,8 @@ class Pipeline:
             if ai_status.get("status") == "error":
                 self.console.warn(
                     "OpenRouter editorial pass failed; deterministic reports were still "
-                    f"generated: {ai_status.get('error', 'unknown error')}"
+                    f"generated: {ai_status.get('error', 'unknown error')}. "
+                    f"Safe diagnostic: {ai_status_path}"
                 )
         self.workspace.write_manifest(
             self.target,

@@ -23,7 +23,7 @@ _________     _____  _________   ___ ___    _____  __________  _____
  \______  /\____|__  /\______  /\___|_  /\____|__  /_______ \____|__  /
         \/         \/        \/       \/         \/        \/       \/
                    github.com/W4RRR/cachaza by W4RRR
-                                 v1.0.7
+                                 v1.0.8
 ```
 
 Cachaza turns an explicitly defined domain or network scope into a reproducible reconnaissance workspace. It collects passive intelligence first, applies scope decisions to every observation, and requires explicit authorization before direct-contact stages run.
@@ -590,7 +590,12 @@ never embedded in `report.html`, `report.pdf`, JSON, the manifest, or command
 history. OpenRouter returns a strict structured narrative containing a headline,
 executive summary, Origin assessment, business impact, recommended actions, and
 limitations. If the provider is unavailable, deterministic reports are still
-written and `rest/ai/reporting-status.json` records the safe diagnostic.
+written and `rest/ai/reporting-status.json` records the safe diagnostic. Responses
+wrapped in Markdown, mixed with surrounding text, split into content parts, or
+using supported localized field names are normalized locally. A response that is
+valid JSON but does not satisfy the narrative contract receives one bounded
+semantic repair attempt; raw model prose and report evidence are not retained in
+the failure diagnostic.
 
 ### Professional white-label mode (`-op`)
 
@@ -745,14 +750,14 @@ cachaza -update
 
 Both commands are equivalent.
 
-Once v1.0.7 has been merged into `main` and the `v1.0.7` Release has been published from that same commit, the normal upgrade is:
+Once v1.0.8 has been merged into `main` and the `v1.0.8` Release has been published from that same commit, the normal upgrade is:
 
 ```bash
 cachaza -up
 cachaza -version
 ```
 
-The second command must print `cachaza 1.0.7`.
+The second command must print `cachaza 1.0.8`.
 
 ### Publishing a GitHub Release
 
@@ -763,8 +768,8 @@ Create the tag only after the release pull request has been merged into `main`:
 ```bash
 git switch main
 git pull --ff-only origin main
-git tag -a v1.0.7 -m "Cachaza v1.0.7"
-git push origin v1.0.7
+git tag -a v1.0.8 -m "Cachaza v1.0.8"
+git push origin v1.0.8
 ```
 
 The Release must be public—not a draft or prerelease—so `/releases/latest` and `cachaza -up` can discover it.
