@@ -1328,20 +1328,27 @@ def _render_txt(data: dict[str, Any], *, color: bool = True) -> str:
     if data.get("origin_discovery"):
         origin = data["origin_discovery"]
         section("AUTOMATIC ORIGIN DISCOVERY")
+        origin_ip = origin.get("origin_ip") or origin.get("highest_confidence_candidate") or "none"
+        origin_probability = origin.get("origin_probability_percent", origin.get("confidence_score", 0))
+        origin_alert_code = "1;31" if origin_ip != "none" else "90"
+
+        def origin_row(label: str, value: Any, code: str = "36") -> str:
+            return f"{paint(f'{label:<31}', '1;36')}: {paint(value, code)}"
+
         lines.extend(
             [
-                f"Status                         : {origin.get('status', 'unknown')}",
-                f"Mode                           : {origin.get('mode', 'unknown')}",
-                f"CDN/WAF detected               : {origin.get('cdn_waf_detected', {}).get('provider', 'Unknown')}",
-                f"Candidates collected           : {origin.get('candidates_collected', 0)}",
-                f"Rejected before validation     : {origin.get('candidates_rejected_before_validation', 0)}",
-                f"Actively validated             : {origin.get('candidates_actively_validated', 0)}",
-                f"Direct requests performed      : {origin.get('direct_requests_performed', 0)}",
-                f"Origin IP                      : {origin.get('origin_ip') or origin.get('highest_confidence_candidate') or 'none'}",
-                f"Origin probability             : {origin.get('origin_probability_percent', origin.get('confidence_score', 0))}%",
-                f"Confidence band                : {origin.get('confidence_band', 'inconclusive')}",
-                f"Classification                 : {origin.get('classification', 'inconclusive')}",
-                "Manual confirmation recommended: yes",
+                origin_row("Status", origin.get("status", "unknown"), "1;32"),
+                origin_row("Mode", origin.get("mode", "unknown"), "1;35"),
+                origin_row("CDN/WAF detected", origin.get("cdn_waf_detected", {}).get("provider", "Unknown"), "1;33"),
+                origin_row("Candidates collected", origin.get("candidates_collected", 0), "1;36"),
+                origin_row("Rejected before validation", origin.get("candidates_rejected_before_validation", 0), "1;33"),
+                origin_row("Actively validated", origin.get("candidates_actively_validated", 0), "1;32"),
+                origin_row("Direct requests performed", origin.get("direct_requests_performed", 0), "1;36"),
+                origin_row("Origin IP", origin_ip, origin_alert_code),
+                origin_row("Origin probability", f"{origin_probability}%", origin_alert_code),
+                origin_row("Confidence band", origin.get("confidence_band", "inconclusive"), origin_alert_code),
+                origin_row("Classification", origin.get("classification", "inconclusive"), origin_alert_code),
+                origin_row("Manual confirmation recommended", "yes", "1;33"),
             ]
         )
         ranked = origin.get("candidate_probabilities", [])
@@ -1351,16 +1358,17 @@ def _render_txt(data: dict[str, Any], *, color: bool = True) -> str:
                 if not isinstance(item, dict):
                     continue
                 lines.append(
-                    f"  #{item.get('rank', '-')} {item.get('ip', '-')} "
-                    f"{item.get('origin_probability_percent', 0)}% "
-                    f"[{item.get('confidence_band', 'inconclusive')}] "
-                    f"{item.get('classification', 'inconclusive')}"
+                    paint(f"  #{item.get('rank', '-')}", "1;36") + " "
+                    + paint(item.get("ip", "-"), "1;31" if item.get("eligible_origin") else "33") + " "
+                    + paint(f"{item.get('origin_probability_percent', 0)}%", "1;31" if item.get("eligible_origin") else "33") + " "
+                    + paint(f"[{item.get('confidence_band', 'inconclusive')}]", "35") + " "
+                    + str(item.get("classification", "inconclusive"))
                 )
         if origin.get("message"):
-            lines.append(str(origin["message"]))
+            lines.append(paint(origin["message"], "33"))
         if origin.get("probability_notice"):
-            lines.append(str(origin["probability_notice"]))
-        lines.append(str(origin.get("warning") or ""))
+            lines.append(paint(origin["probability_notice"], "90"))
+        lines.append(paint(origin.get("warning") or "", "33"))
 
     section("EXTERNAL SOURCE STATUS")
     if data.get("source_status"):

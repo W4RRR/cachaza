@@ -2175,24 +2175,39 @@ class OriginEngine:
         return f"Automatic Origin discovery completed in {self.config.mode} mode; {len(candidates)} candidates, {len(selected)} selected, highest {highest}"
 
 
-def render_origin_summary(ranking: dict[str, Any]) -> str:
+def render_origin_summary(ranking: dict[str, Any], *, color: bool = True) -> str:
+    """Render the final Origin summary with semantic terminal colors."""
+
+    def paint(value: Any, code: str) -> str:
+        text = str(value)
+        return f"\x1b[{code}m{text}\x1b[0m" if color else text
+
+    def row(label: str, value: Any, code: str = "36") -> str:
+        return f"{paint(label, '1;36')}: {paint(value, code)}"
+
     highest = ranking.get("origin_ip") or ranking.get("highest_confidence_candidate") or "none"
+    probability = ranking.get("origin_probability_percent", ranking.get("confidence_score", 0))
+    confidence = str(ranking.get("confidence_band", "inconclusive"))
+    classification = str(ranking.get("classification", "inconclusive"))
+    origin_code = "1;31" if highest != "none" else "90"
+    probability_code = "1;31" if highest != "none" else "90"
+    message = str(ranking.get("message", ""))
     return "\n".join([
-        f"Automatic origin discovery: {ranking.get('status', 'unknown')}",
-        f"Mode: {ranking.get('mode', 'unknown')}",
-        f"CDN/WAF detected: {ranking.get('cdn_waf_detected', {}).get('provider', 'Unknown')}",
-        f"Candidates collected: {ranking.get('candidates_collected', 0)}",
-        f"Candidates rejected before validation: {ranking.get('candidates_rejected_before_validation', 0)}",
-        f"Candidates actively validated: {ranking.get('candidates_actively_validated', 0)}",
-        f"Direct requests performed: {ranking.get('direct_requests_performed', 0)}",
-        f"Origin IP: {highest}",
-        f"Origin probability: {ranking.get('origin_probability_percent', ranking.get('confidence_score', 0))}%",
-        f"Confidence band: {ranking.get('confidence_band', 'inconclusive')}",
-        f"Classification: {ranking.get('classification', 'inconclusive')}",
-        "Manual confirmation recommended: yes",
-        ranking.get("message", ""),
-        ranking.get("probability_notice", ORIGIN_PROBABILITY_NOTICE),
-        ORIGIN_WARNING,
+        row("Automatic origin discovery", ranking.get("status", "unknown"), "1;32"),
+        row("Mode", ranking.get("mode", "unknown"), "1;35"),
+        row("CDN/WAF detected", ranking.get("cdn_waf_detected", {}).get("provider", "Unknown"), "1;33"),
+        row("Candidates collected", ranking.get("candidates_collected", 0), "1;36"),
+        row("Candidates rejected before validation", ranking.get("candidates_rejected_before_validation", 0), "1;33"),
+        row("Candidates actively validated", ranking.get("candidates_actively_validated", 0), "1;32"),
+        row("Direct requests performed", ranking.get("direct_requests_performed", 0), "1;36"),
+        row("Origin IP", highest, origin_code),
+        row("Origin probability", f"{probability}%", probability_code),
+        row("Confidence band", confidence, probability_code),
+        row("Classification", classification, probability_code),
+        row("Manual confirmation recommended", "yes", "1;33"),
+        paint(message, "33") if message else "",
+        paint(ranking.get("probability_notice", ORIGIN_PROBABILITY_NOTICE), "90"),
+        paint(ORIGIN_WARNING, "33"),
     ]).strip()
 
 

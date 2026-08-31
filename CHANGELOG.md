@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added semantic ANSI colors to the final automatic Origin discovery summary and its `report.txt` counterpart, while preserving plain output with `-nc` / `--no-color`.
+
 ## 1.0.8 - 2026-08-28
 
 - Added tolerant, evidence-safe decoding for OpenRouter JSON returned in Markdown fences, mixed text, segmented content, parsed objects, wrapper objects and localized field names.

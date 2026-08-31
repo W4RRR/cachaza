@@ -40,6 +40,7 @@ from cachaza.origin import (
     direct_http_request,
     probe_jarm,
     probe_tls,
+    render_origin_summary,
     score_candidate,
     should_auto_validate,
 )
@@ -521,6 +522,39 @@ class OriginEngineTests(unittest.TestCase):
         edges = {(item["source"], item["target"], item["relationship"]) for item in report["graph"]["edges"]}
         self.assertIn(("domain:example.com", "origin_candidate:93.184.216.34", "Origin correlation"), edges)
         self.assertIn(("ip:93.184.216.34", "origin_candidate:93.184.216.34", "registered or observed as"), edges)
+
+
+class OriginSummaryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.ranking = {
+            "status": "completed",
+            "mode": "deep",
+            "cdn_waf_detected": {"provider": "Cloudflare"},
+            "candidates_collected": 40,
+            "candidates_rejected_before_validation": 38,
+            "candidates_actively_validated": 2,
+            "direct_requests_performed": 19,
+            "origin_ip": None,
+            "origin_probability_percent": 0,
+            "confidence_band": "inconclusive",
+            "classification": "inconclusive",
+            "message": "No public origin identified.",
+        }
+
+    def test_summary_uses_semantic_ansi_colors(self) -> None:
+        rendered = render_origin_summary(self.ranking)
+
+        self.assertIn("\x1b[1;36mCDN/WAF detected\x1b[0m", rendered)
+        self.assertIn("\x1b[1;33mCloudflare\x1b[0m", rendered)
+        self.assertIn("\x1b[1;32m2\x1b[0m", rendered)
+        self.assertIn("\x1b[1;33myes\x1b[0m", rendered)
+
+    def test_summary_can_disable_ansi_colors(self) -> None:
+        rendered = render_origin_summary(self.ranking, color=False)
+
+        self.assertNotIn("\x1b[", rendered)
+        self.assertIn("CDN/WAF detected: Cloudflare", rendered)
+        self.assertIn("Manual confirmation recommended: yes", rendered)
 
 
 class OriginCliTests(unittest.TestCase):

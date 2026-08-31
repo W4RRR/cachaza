@@ -953,7 +953,7 @@ def command_run(args: argparse.Namespace, console: Console) -> int:
             except json.JSONDecodeError:
                 ranking = {}
             if ranking:
-                print("\n" + render_origin_summary(ranking))
+                print("\n" + render_origin_summary(ranking, color=not args.no_color))
         html_report = root / "report.html"
         if html_report.is_file():
             print(
