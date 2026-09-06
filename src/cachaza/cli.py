@@ -487,6 +487,10 @@ its findings. Direct probes must be explicitly authorized with -active.""",
         help="explicit BlackWidow executable; otherwise Cachaza uses/installs a pinned user-space copy",
     )
 
+    run.add_argument("-refresh-stages", default="", help="refresh selected stages and downstream stages in a resumed workspace")
+    run.add_argument("-cache-max-age-hours", type=float, help="override per-stage cache lifetime in hours; 0 always refreshes")
+    from .audit_cli import add_commands
+    add_commands(commands, common)
     plan = commands.add_parser("plan", parents=[common], add_help=False, allow_abbrev=False, help="validate scope and preview stages without network calls or files")
     _add_target_arguments(plan)
     plan.add_argument("-profile", choices=tuple(PROFILES), default=DEFAULT_PROFILE)
@@ -847,12 +851,22 @@ def command_run(args: argparse.Namespace, console: Console) -> int:
     dns_enum_tools = _csv(args.dns_enum_tools)
     if not dns_enum_tools or set(dns_enum_tools) - {"dnsenum", "fierce"}:
         raise ValidationError("-dns-enum-tools must contain dnsenum and/or fierce")
+    refresh_stages = _csv(args.refresh_stages)
+    selected_stages = set(stages) | ({"whois"} if args.whois else set()) | ({"wappalyzer"} if args.wappalyzer else set())
+    if set(refresh_stages) - selected_stages:
+        raise ValidationError("-refresh-stages must name stages selected for this run")
+    if args.cache_max_age_hours is not None:
+        import math
+        if not math.isfinite(args.cache_max_age_hours) or args.cache_max_age_hours < 0:
+            raise ValidationError("-cache-max-age-hours must be a finite nonnegative number")
     output, resume = _prepare_run_output(args.output, args.resume, args.fresh, target)
     workspace = RunWorkspace.create(output, target, resume=resume)
     console.attach_log(workspace.rest / "execution.log")
     console.info(f"Full execution log: {workspace.rest / 'execution.log'}")
     origin_config = _origin_config_from_args(args) if args.origin_auto else None
     options = RunOptions(
+        refresh_stages=refresh_stages,
+        cache_max_age_hours=args.cache_max_age_hours,
         stages=stages,
         profile=args.profile,
         timeout=args.timeout,
@@ -1106,7 +1120,7 @@ def main(argv: list[str] | None = None) -> int:
         "-" + item[2:] if item.startswith("--") and item != "--" else item
         for item in raw_args
     ]
-    command_names = {"run", "plan", "signatures", "normalize", "monitor", "doctor"}
+    command_names = {"run", "plan", "signatures", "normalize", "monitor", "doctor", "diff", "review", "report"}
     command_index = next(
         (index for index, item in enumerate(normalized_args) if item in command_names),
         None,
@@ -1125,6 +1139,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(normalized_args)
     console = Console(verbose=args.verbose, silent=args.silent, color=not args.no_color)
     try:
+        if args.command in {"diff", "review", "report"} and not args.update:
+            from .audit_cli import execute
+            return execute(args)
         console.banner(__version__)
         if args.update:
             if args.command:

@@ -10,6 +10,7 @@ from typing import Any, Iterable
 
 from .models import Finding, StageStatus, TargetSpec, utc_now
 from .web import normalize_endpoint_url
+from .audit import age_hours, STAGE_TTL_HOURS
 
 
 def _slug(value: str) -> str:
@@ -30,6 +31,7 @@ class RunWorkspace:
         self.findings: list[Finding] = []
         self._seen: set[tuple[str, str, str, str]] = set()
         self.stages: list[StageStatus] = []
+        self.refreshing_stages: set[str] = set()
         if resume:
             legacy_findings = self.root / "findings.jsonl"
             if self.findings_path.is_file():
@@ -110,7 +112,7 @@ class RunWorkspace:
             handle.write(json.dumps(finding.to_dict(), ensure_ascii=False, sort_keys=True) + "\n")
         return True
 
-    def checkpoint_matches(self, name: str, cache_key: str) -> bool:
+    def checkpoint_matches(self, name: str, cache_key: str, max_age_hours: float | None = None) -> bool:
         path = self.stage_state / f"{_slug(name)}.json"
         if not path.is_file():
             return False
@@ -118,7 +120,22 @@ class RunWorkspace:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return False
-        return data.get("status") == "completed" and data.get("cache_key") == cache_key
+        age = age_hours(data.get("completed_at"))
+        ttl = max_age_hours if max_age_hours is not None else STAGE_TTL_HOURS.get(name, 24)
+        return data.get("status") == "completed" and data.get("cache_key") == cache_key and age is not None and age <= ttl
+
+    def checkpoint_time(self, name: str) -> str | None:
+        try:
+            return json.loads((self.stage_state / f"{_slug(name)}.json").read_text(encoding="utf-8")).get("completed_at")
+        except (OSError, ValueError):
+            return None
+
+    def replace_findings(self, findings: list[Finding]) -> None:
+        temporary = self.findings_path.with_suffix(".tmp")
+        temporary.write_text("".join(json.dumps(item.to_dict(), ensure_ascii=False, sort_keys=True) + "\n" for item in findings), encoding="utf-8")
+        temporary.replace(self.findings_path)
+        self.findings = list(findings)
+        self._seen = {self._finding_key(item) for item in findings}
 
     def write_checkpoint(self, name: str, cache_key: str, details: str) -> Path:
         path = self.stage_state / f"{_slug(name)}.json"

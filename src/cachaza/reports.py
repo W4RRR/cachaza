@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from .origin_assessment import _build_origin_trace, _build_origin_remediation
+from .audit import coverage, review_queue
+from .adapters.contacts import normalize_phone
+
 import csv
 import copy
 import ipaddress
@@ -214,7 +218,9 @@ def build_key_findings(findings: list[Finding] | list[dict[str, Any]]) -> dict[s
         if kind == "email":
             buckets["emails"].add(value)
         if kind == "phone":
-            buckets["phones"].add(value)
+            normalized_phone = normalize_phone(value)
+            if normalized_phone:
+                buckets["phones"].add(normalized_phone)
         if kind == "address":
             buckets["addresses"].add(value)
         if kind == "dns_zone_transfer" and metadata.get("allowed"):
@@ -386,323 +392,6 @@ def _graph_identifier(kind: str, value: str) -> str:
     return f"{kind}:{value}"
 
 
-def _build_origin_trace(origin: dict[str, Any]) -> dict[str, Any]:
-    """Explain how the leading Origin IP was reached without inflating certainty."""
-
-    if not isinstance(origin, dict):
-        return {}
-    origin_ip = str(
-        origin.get("origin_ip") or origin.get("highest_confidence_candidate") or ""
-    ).strip()
-    if not origin_ip:
-        return {}
-    primary_rows = origin.get("primary", [])
-    primary = next(
-        (
-            item
-            for item in primary_rows
-            if isinstance(item, dict) and str(item.get("ip") or "") == origin_ip
-        ),
-        {},
-    )
-    evidence = [item for item in primary.get("evidence", []) if isinstance(item, dict)]
-    source_families = sorted(
-        {
-            str(value)
-            for value in primary.get("independent_source_families", [])
-            if str(value).strip()
-        }
-        | {
-            str(item.get("source_family"))
-            for item in evidence
-            if str(item.get("source_family") or "").strip()
-        }
-    )
-    passive_evidence = [
-        item
-        for item in evidence
-        if item.get("source_family")
-        not in {"direct_validation", "correlation", "network_classification"}
-    ]
-    direct_evidence = [
-        item for item in evidence if item.get("source_family") == "direct_validation"
-    ]
-    positive_direct = [
-        item for item in direct_evidence if int(item.get("score", 0) or 0) > 0
-    ]
-    direct_requests = int(origin.get("direct_requests_performed", 0) or 0)
-    classification = str(origin.get("classification") or "inconclusive")
-    validation_status = str(primary.get("validation_status") or "not_validated")
-    direct_family_present = "direct_validation" in source_families
-    direct_match_present = bool(positive_direct) or (
-        direct_family_present and not evidence
-    )
-    direct_path_validated = bool(
-        direct_requests
-        and direct_match_present
-        and classification
-        in {"high_confidence_origin", "probable_origin", "possible_origin"}
-        and validation_status != "protected_origin"
-    )
-    protected = classification == "protected_origin" or validation_status == "protected_origin"
-    if direct_path_validated:
-        status = "direct_path_validated"
-        status_label = "CDN/WAF boundary bypass validated"
-        severity = "critical"
-    elif protected:
-        status = "origin_protected"
-        status_label = "Origin correlated; direct ingress remains protected"
-        severity = "warning"
-    elif direct_requests:
-        status = "direct_validation_inconclusive"
-        status_label = "Direct validation inconclusive"
-        severity = "warning"
-    else:
-        status = "passive_correlation_only"
-        status_label = "Likely origin; direct validation not performed"
-        severity = "information"
-    cdn = origin.get("cdn_waf_detected", {})
-    cdn_provider = str(cdn.get("provider") or "Unknown") if isinstance(cdn, dict) else "Unknown"
-    cdn_signals = [
-        str(value)
-        for value in (cdn.get("signals", []) if isinstance(cdn, dict) else [])
-        if str(value).strip()
-    ]
-    passive_tools = sorted(
-        {
-            str(item.get("source") or item.get("source_family"))
-            for item in passive_evidence
-            if str(item.get("source") or item.get("source_family") or "").strip()
-        }
-        or {value for value in source_families if value != "direct_validation"}
-    )
-    validation_signals = [
-        str(item.get("description") or item.get("code"))
-        for item in positive_direct
-        if str(item.get("description") or item.get("code") or "").strip()
-    ]
-    if direct_family_present and not validation_signals:
-        validation_signals.append("Direct HTTP/TLS correlation recorded")
-    passive_signals = [
-        str(item.get("description") or item.get("code"))
-        for item in passive_evidence
-        if str(item.get("description") or item.get("code") or "").strip()
-    ]
-    probability = int(
-        origin.get("origin_probability_percent", origin.get("confidence_score", 0)) or 0
-    )
-    steps = [
-        {
-            "number": 1,
-            "tactic": "Establish reference",
-            "technique": "Public edge baseline",
-            "procedure": f"Captured the public DNS, HTTP and TLS posture for the target behind {cdn_provider}.",
-            "tools": ["DNS", "HTTP", "TLS"],
-            "evidence": cdn_signals,
-            "status": "completed",
-            "relationship": "public baseline",
-        },
-        {
-            "number": 2,
-            "tactic": "Discover candidate infrastructure",
-            "technique": "Passive origin correlation",
-            "procedure": (
-                "Collected historical/current resolution, certificate, scan-index and "
-                "provider observations, then retained candidate public addresses."
-            ),
-            "tools": passive_tools or ["normalized OSINT evidence"],
-            "evidence": passive_signals,
-            "status": "completed",
-            "relationship": "candidate discovery",
-        },
-        {
-            "number": 3,
-            "tactic": "Separate edge from origin",
-            "technique": "CDN/WAF range exclusion and scoring",
-            "procedure": (
-                "Rejected known CDN, private, mail-only and clearly third-party infrastructure; "
-                "deduplicated source families and applied the bounded correlation score."
-            ),
-            "tools": ["network classifier", "correlation engine"],
-            "evidence": [
-                f"{len(source_families)} independent source families",
-                f"{origin.get('candidates_rejected_before_validation', 0)} candidates rejected before validation",
-            ],
-            "status": "completed",
-            "relationship": "edge exclusion & scoring",
-        },
-        {
-            "number": 4,
-            "tactic": "Validate direct exposure",
-            "technique": "Authorized direct-origin HTTP/TLS validation",
-            "procedure": (
-                "Connected to the candidate IP using only bounded HEAD/GET requests while "
-                "preserving the target hostname in HTTP Host and TLS SNI, then compared "
-                "certificates, redirects, content fingerprints, titles, cookies, headers and static assets."
-            ),
-            "tools": ["Cachaza Direct-origin validator"],
-            "evidence": validation_signals,
-            "status": (
-                "validated" if direct_path_validated else "protected" if protected
-                else "inconclusive" if direct_requests else "not performed"
-            ),
-            "relationship": "direct validation",
-        },
-        {
-            "number": 5,
-            "tactic": "Conclude attribution",
-            "technique": "Evidence-backed origin classification",
-            "procedure": (
-                f"Ranked {origin_ip} first with a {probability}% heuristic correlation score "
-                f"and {origin.get('confidence_band', 'inconclusive')} confidence."
-            ),
-            "tools": ["Cachaza reporting engine"],
-            "evidence": [classification, origin.get("probability_notice", "")],
-            "status": "completed",
-            "relationship": "attribution conclusion",
-        },
-    ]
-    return {
-        "status": status,
-        "status_label": status_label,
-        "severity": severity,
-        "origin_ip": origin_ip,
-        "origin_ips": [
-            str(value) for value in origin.get("origin_ips", [origin_ip]) if str(value).strip()
-        ] or [origin_ip],
-        "origin_outcomes": [
-            {
-                "ip": str(item.get("ip") or ""),
-                "probability_percent": int(item.get("origin_probability_percent", 0) or 0),
-                "confidence_band": str(item.get("confidence_band") or "inconclusive"),
-                "classification": str(item.get("classification") or "inconclusive"),
-            }
-            for item in origin.get("origins", []) if isinstance(item, dict) and item.get("ip")
-        ],
-        "cdn_waf_provider": cdn_provider,
-        "probability_percent": max(0, min(100, probability)),
-        "confidence_band": str(origin.get("confidence_band") or "inconclusive"),
-        "classification": classification,
-        "source_families": source_families,
-        "passive_tools": passive_tools,
-        "validation_signals": validation_signals,
-        "direct_requests": direct_requests,
-        "steps": steps,
-        "summary": (
-            f"{origin_ip} was reached through passive infrastructure correlation, CDN/WAF "
-            f"range exclusion and bounded scoring"
-            + (
-                ", then validated as a directly reachable application path using the original Host/SNI."
-                if direct_path_validated else ". Direct reachability was not established."
-            )
-        ),
-        "qualification": (
-            "A validated direct path demonstrates technical reachability outside the public "
-            "CDN/WAF path; it does not prove administrative ownership or authorize further testing."
-        ),
-    }
-
-
-def _build_origin_remediation(trace: dict[str, Any]) -> dict[str, Any]:
-    """Return a vendor-neutral, verifiable plan for closing Origin exposure."""
-
-    if not isinstance(trace, dict) or not trace.get("origin_ip"):
-        return {}
-    exposed = trace.get("status") == "direct_path_validated"
-    provider = str(trace.get("cdn_waf_provider") or "the CDN/WAF provider")
-    origin_ip = str(trace.get("origin_ip"))
-    posture = "urgent" if exposed else "precautionary"
-    actions = [
-        {
-            "priority": "P0" if exposed else "P1",
-            "phase": "Contain",
-            "title": "Restrict public ingress to the Origin",
-            "action": (
-                f"Allow application ports on {origin_ip} only from the current official "
-                f"egress ranges or authenticated private connectivity used by {provider}; "
-                "deny every other Internet source at the cloud security group and host firewall."
-            ),
-            "owner": "Network / cloud operations",
-            "verification": (
-                "A direct connection to the IP with the production Host header and TLS SNI "
-                "must time out, be refused, or return a deliberate deny response from every "
-                "non-CDN test network."
-            ),
-        },
-        {
-            "priority": "P0" if exposed else "P1",
-            "phase": "Authenticate",
-            "title": "Require an authenticated edge-to-Origin path",
-            "action": (
-                "Enable authenticated Origin pulls, mutual TLS, a private tunnel, or an "
-                "equivalent cryptographic control so source-IP allowlisting is not the only gate."
-            ),
-            "owner": "Platform engineering",
-            "verification": (
-                "Requests that preserve the production hostname but lack the edge credential "
-                "must fail before reaching the application."
-            ),
-        },
-        {
-            "priority": "P1",
-            "phase": "Remove exposure paths",
-            "title": "Eliminate records that disclose or reach the Origin",
-            "action": (
-                "Proxy every public web hostname, remove stale or unproxied A/AAAA records, "
-                "close alternate web ports, and review historical environment, staging, mail, "
-                "certificate and scan-index correlations that point to the same address."
-            ),
-            "owner": "DNS / application owners",
-            "verification": (
-                "Current DNS and service inventories must expose only approved edge addresses; "
-                "no alternate hostname or port may serve the production application directly."
-            ),
-        },
-        {
-            "priority": "P1",
-            "phase": "Rotate and harden",
-            "title": "Rotate the address after controls are effective",
-            "action": (
-                "If operationally possible, move the Origin to a new address only after ingress "
-                "controls are active. Configure default virtual hosts to deny unknown Host/SNI "
-                "values and minimize identifying banners."
-            ),
-            "owner": "Infrastructure / application security",
-            "verification": (
-                "The retired address must no longer expose the service, and the replacement "
-                "address must be unreachable outside the authenticated edge path."
-            ),
-        },
-        {
-            "priority": "P2",
-            "phase": "Retest and monitor",
-            "title": "Prove closure and detect regression",
-            "action": (
-                "Repeat the same Host/SNI direct-origin validation from an external network, "
-                "cover all discovered ports, and alert on denied direct requests or DNS changes."
-            ),
-            "owner": "Security operations",
-            "verification": (
-                "Document a failed direct-path retest, retain firewall evidence, and schedule "
-                "continuous DNS and exposure monitoring."
-            ),
-        },
-    ]
-    return {
-        "posture": posture,
-        "title": "Origin exposure remediation plan",
-        "objective": (
-            "Make the application reachable only through the approved CDN/WAF path and remove "
-            "the infrastructure signals that make direct-Origin rediscovery actionable."
-        ),
-        "context": (
-            "The first control is reachability, not secrecy: historical intelligence can retain "
-            "an old address indefinitely, so rotating an IP without enforcing ingress controls "
-            "does not resolve the exposure."
-        ),
-        "actions": actions,
-    }
-
 
 def _build_graph(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     """Build a relationship graph from finding metadata and normalized values."""
@@ -850,7 +539,7 @@ def _build_graph(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
                         metadata.get("probability_method")
                         or "heuristic_correlation_score_v1"
                     ),
-                    "validation": f"{max(0, min(100, probability))}% origin likelihood",
+                    "validation": f"{max(0, min(100, probability))}/100 origin likelihood",
                 }
             )
 
@@ -1211,6 +900,15 @@ def build_report_data(
         },
         "findings": [finding.to_dict() for finding in workspace.findings],
     }
+    data["schema_version"] = 2
+    data["coverage"] = coverage(data)
+    review_path = workspace.rest / "review.json"
+    saved_review = json.loads(review_path.read_text(encoding="utf-8")) if review_path.exists() else {}
+    data["review_queue"] = review_queue(data["findings"], saved_review)
+    data["review_notice"] = "Review states are operator annotations, independent of scanner confidence and validation."
+    data["origin"]["correlation_score"] = data["origin"]["probability_percent"]
+    data["origin"]["score_scale"] = 100
+    data["origin"]["legacy_probability_fields"] = "Deprecated aliases for an uncalibrated correlation score."
     data["origin_trace"] = _build_origin_trace(origin_discovery)
     data["origin_remediation"] = _build_origin_remediation(data["origin_trace"])
     data["subdomain_summary"] = build_subdomain_summary(data["findings"])
@@ -1345,7 +1043,7 @@ def _render_txt(data: dict[str, Any], *, color: bool = True) -> str:
                 origin_row("Actively validated", origin.get("candidates_actively_validated", 0), "1;32"),
                 origin_row("Direct requests performed", origin.get("direct_requests_performed", 0), "1;36"),
                 origin_row("Origin IP", origin_ip, origin_alert_code),
-                origin_row("Origin probability", f"{origin_probability}%", origin_alert_code),
+                origin_row("Origin correlation score", f"{origin_probability}/100", origin_alert_code),
                 origin_row("Confidence band", origin.get("confidence_band", "inconclusive"), origin_alert_code),
                 origin_row("Classification", origin.get("classification", "inconclusive"), origin_alert_code),
                 origin_row("Manual confirmation recommended", "yes", "1;33"),
@@ -1360,7 +1058,7 @@ def _render_txt(data: dict[str, Any], *, color: bool = True) -> str:
                 lines.append(
                     paint(f"  #{item.get('rank', '-')}", "1;36") + " "
                     + paint(item.get("ip", "-"), "1;31" if item.get("eligible_origin") else "33") + " "
-                    + paint(f"{item.get('origin_probability_percent', 0)}%", "1;31" if item.get("eligible_origin") else "33") + " "
+                    + paint(f"{item.get('origin_probability_percent', 0)}/100", "1;31" if item.get("eligible_origin") else "33") + " "
                     + paint(f"[{item.get('confidence_band', 'inconclusive')}]", "35") + " "
                     + str(item.get("classification", "inconclusive"))
                 )
@@ -1370,6 +1068,14 @@ def _render_txt(data: dict[str, Any], *, color: bool = True) -> str:
             lines.append(paint(origin["probability_notice"], "90"))
         lines.append(paint(origin.get("warning") or "", "33"))
 
+    section("COVERAGE AND FRESHNESS")
+    lines.append(data.get("coverage", {}).get("notice", ""))
+    for row in data.get("coverage", {}).get("stages", []):
+        lines.append(f"{row['name']}: {row['status']} | {row['freshness']} | collected={row.get('evidence_at') or 'unknown'}")
+    section("REVIEW QUEUE")
+    lines.append(data.get("review_notice", ""))
+    for row in data.get("review_queue", []):
+        lines.append(f"{row['id']} | {row['state']} | {row['value']} | owner={row['owner']} | notes={row['notes']} | closure={row['closure_test']}")
     section("EXTERNAL SOURCE STATUS")
     if data.get("source_status"):
         for source, status in sorted(data["source_status"].items()):
@@ -1772,7 +1478,7 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
             if probability:
                 color = palette["green"] if item.get("eligible_origin") else palette["amber"]
                 drawing.add(Rect(label_width, y, bar_width * probability / 100, 4.2 * mm, rx=2 * mm, ry=2 * mm, fillColor=color, strokeColor=None))
-            drawing.add(String(label_width + bar_width + 3 * mm, y + 1.2 * mm, f"{probability}%", fontName="Helvetica-Bold", fontSize=7, fillColor=palette["navy"]))
+            drawing.add(String(label_width + bar_width + 3 * mm, y + 1.2 * mm, f"{probability}/100", fontName="Helvetica-Bold", fontSize=7, fillColor=palette["navy"]))
         return drawing
 
     def origin_path_diagram(trace: dict[str, Any]) -> Any:
@@ -1974,11 +1680,11 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
             kicker="Leading Origin IP",
             title=trace.get("origin_ip", "Not identified"),
             status=(
-                f"{trace.get('probability_percent', 0)}% - "
+                f"{trace.get('probability_percent', 0)}/100 - "
                 + (
                     "validated bypass"
                     if trace.get("status") == "direct_path_validated"
-                    else "evidence correlation"
+                    else "direct path; edge unverified" if trace.get("status") == "direct_reachable_no_boundary" else "evidence correlation"
                 )
             ),
             outcome=True,
@@ -2106,7 +1812,9 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
             ("Actively validated", origin.get("candidates_actively_validated", 0)),
             ("Direct requests", origin.get("direct_requests_performed", 0)),
             ("Origin IP(s)", ", ".join(origin.get("origin_ips", [])) or origin.get("origin_ip") or origin.get("highest_confidence_candidate") or "none"),
-            ("Origin probability", f"{origin.get('origin_probability_percent', origin.get('confidence_score', 0))}%"),
+            ("Origin correlation score", f"{origin.get('origin_probability_percent', origin.get('confidence_score', 0))}/100"),
+            ("Direct validation", data.get("origin_trace", {}).get("direct_validation", "not_performed")),
+            ("Protected edge established", "yes" if data.get("origin_trace", {}).get("boundary_observed") else "no"),
             ("Confidence band", origin.get("confidence_band", "inconclusive")),
             ("Classification", origin.get("classification", "inconclusive")),
         ):
@@ -2124,7 +1832,7 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
                     Paragraph(_pdf_text(alert_title), styles["AlertKicker"]),
                     Paragraph(
                         _pdf_text(
-                            f"{trace.get('origin_ip')} behind {trace.get('cdn_waf_provider', 'the observed edge')}"
+                            f"{trace.get('origin_ip')} - {trace.get('status_label', 'Attribution pending')}"
                         ),
                         styles["AlertTitle"],
                     ),
@@ -2157,7 +1865,7 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
                 "The red outcome confirms a directly reachable application path outside "
                 "the observed CDN/WAF boundary."
                 if trace.get("status") == "direct_path_validated"
-                else "The outcome remains an evidence correlation unless direct reachability is validated."
+                else str(trace.get("status_label") or "Direct validation is pending.")
             )
             origin_story.extend(
                 [
@@ -2202,14 +1910,14 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
             )
         ranked_origin = origin.get("candidate_probabilities", [])
         if isinstance(ranked_origin, list) and ranked_origin:
-            ranking_rows = [[p(value, "CellHead") for value in ("IP", "Probability", "Band", "Classification", "Sources")]]
+            ranking_rows = [[p(value, "CellHead") for value in ("IP", "Score /100", "Band", "Classification", "Sources")]]
             for item in ranked_origin[:20]:
                 if not isinstance(item, dict):
                     continue
                 ranking_rows.append(
                     [
                         p(item.get("ip", "-")),
-                        p(f"{item.get('origin_probability_percent', 0)}%"),
+                        p(f"{item.get('origin_probability_percent', 0)}/100"),
                         p(item.get("confidence_band", "inconclusive")),
                         p(item.get("classification", "inconclusive")),
                         p(", ".join(item.get("sources", [])) or "-"),
@@ -2219,7 +1927,7 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
                 [
                     KeepTogether(
                         [
-                            Paragraph("Origin probability ranking", styles["Section"]),
+                            Paragraph("Origin correlation score ranking", styles["Section"]),
                             origin_probability_chart(ranked_origin),
                             Spacer(1, 2 * mm),
                         ]
@@ -2259,7 +1967,7 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
             origin_story.extend(
                 [
                     PageBreak(),
-                    Paragraph("How to remediate the Origin exposure", styles["ReportTitle"]),
+                    Paragraph("Review the intended public architecture" if remediation.get("posture") == "review_architecture" else "How to remediate the Origin exposure", styles["ReportTitle"]),
                     Paragraph(_pdf_text(remediation.get("objective", "")), styles["AIBody"]),
                     Paragraph(_pdf_text(remediation.get("context", "")), styles["Warning"]),
                     Spacer(1, 2 * mm),
@@ -2334,6 +2042,7 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
         cover,
         Spacer(1, 5 * mm),
         metric_table,
+        Paragraph(_pdf_text("Coverage: " + ", ".join(f"{count} {state}" for state, count in data.get("coverage", {}).get("provider_counts", {}).items()) + ". Provider/source checks are independent of stage completion; see Coverage and freshness for collection timestamps."), styles["BodySmall"]),
         Paragraph("Executive key findings", styles["Section"]),
         LongTable(key_rows, colWidths=[48 * mm, 17 * mm, 100 * mm], repeatRows=1, style=key_style),
         *origin_story,
@@ -2414,6 +2123,18 @@ def _write_pdf(path: Path, data: dict[str, Any]) -> None:
         registration_rows.append([p("No registry records"), p("-"), p("-")])
     story.append(LongTable(registration_rows, colWidths=[50 * mm, 52 * mm, 63 * mm], repeatRows=1, style=table_style))
 
+    story.append(Paragraph("Coverage and freshness", styles["Section"]))
+    story.append(p(data.get("coverage", {}).get("notice", "")))
+    coverage_rows = [[p(v, "CellHead") for v in ("Stage", "State / freshness", "Evidence collected")]]
+    for row in data.get("coverage", {}).get("stages", []):
+        coverage_rows.append([p(row["name"]), p(f"{row['status']} / {row['freshness']}"), p(row.get("evidence_at") or "unknown")])
+    story.append(LongTable(coverage_rows, colWidths=[35 * mm, 55 * mm, 75 * mm], repeatRows=1, style=table_style))
+    reviewed = [r for r in data.get("review_queue", []) if r["state"] != "pending" or r["owner"] or r["notes"]]
+    story.append(Paragraph("Review queue", styles["Section"]))
+    story.append(p(data.get("review_notice", "")))
+    story.append(p(f"{len(data.get('review_queue', []))} review items; {len(reviewed)} annotated. Full queue and IDs are available in HTML/JSON/TXT."))
+    for row in reviewed:
+        story.append(p(f"{row['state']} | {row['value']} | owner={row['owner']} | notes={row['notes']} | closure={row['closure_test']}"))
     story.append(Paragraph("Execution stages", styles["Section"]))
     stage_rows = [[p(value, "CellHead") for value in ("Stage", "Status", "Details")]]
     stage_rows.extend([[p(item["name"]), p(item["status"]), p(item.get("details", ""))] for item in data["stages"]])

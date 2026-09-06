@@ -462,7 +462,7 @@ class OriginEngineTests(unittest.TestCase):
         self.assertEqual(report["origin"]["ip"], "93.184.216.34")
         self.assertEqual(node["origin_probability_percent"], 82)
         self.assertIn("Most likely real origin IP", document)
-        self.assertIn("Origin probability 82 percent", document)
+        self.assertIn("Origin correlation score 82 out of 100", document)
 
     def test_strong_unreachable_candidate_remains_inconclusive(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

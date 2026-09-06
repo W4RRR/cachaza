@@ -32,6 +32,8 @@ class StageStatus:
     started_at: str | None = None
     finished_at: str | None = None
     details: str = ""
+    evidence_at: str | None = None
+    max_age_hours: float = 24
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -171,6 +173,8 @@ class OriginCandidate:
     def to_dict(self) -> dict[str, Any]:
         return {
             "ip": self.ip,
+            "correlation_score": self.origin_probability_percent,
+            "score_scale": 100,
             "hostnames": sorted(set(self.hostnames)),
             "evidence": [item.to_dict() for item in self.evidence],
             "network": self.network.to_dict(),

@@ -23,7 +23,7 @@ _________     _____  _________   ___ ___    _____  __________  _____
  \______  /\____|__  /\______  /\___|_  /\____|__  /_______ \____|__  /
         \/         \/        \/       \/         \/        \/       \/
                    github.com/W4RRR/cachaza by W4RRR
-                                 v1.0.8
+                                 v1.1.0
 ```
 
 Cachaza turns an explicitly defined domain or network scope into a reproducible reconnaissance workspace. It collects passive intelligence first, applies scope decisions to every observation, and requires explicit authorization before direct-contact stages run.
@@ -388,7 +388,7 @@ cachaza run -d example.com -profile full -active -authorized -s -harvester -dns-
 > [!NOTE]
 > A high-confidence Origin result is a technical correlation. It is not proof of ownership, scope, or permission for additional testing.
 
-`-origin-ip` and `-real-origin-ip` are readable aliases of `-origin-auto`; all three enable the same bounded workflow. The terminal summary and every structured report expose `origin_ip`, `origin_probability`, `origin_probability_percent`, `confidence_band`, classification, and a ranked list of all candidate probabilities. The percentage is the explainable 0-100 correlation score, not a statistically calibrated probability.
+`-origin-ip` and `-real-origin-ip` are readable aliases of `-origin-auto`; all three enable the same bounded workflow. Reports show the Origin correlation score out of 100 separately from direct validation. Structured reports expose `correlation_score`, `score_scale`, `confidence_band`, classification and candidate rankings. Legacy `origin_probability` and `origin_probability_percent` fields remain deprecated score aliases, not calibrated probabilities.
 
 Origin artifacts are stored under `rest/origin/`, including the public baseline, all/selected/rejected candidates, validation evidence, provider status, network classification, request budget, and final JSON/CSV ranking. Response bodies are stored only when `-origin-save-bodies` is explicit.
 
@@ -543,7 +543,7 @@ stdout/stderr, duration, configured timeout, return code, stage messages and war
 | JSON | Lossless scope, Origin IP/probabilities, deterministic attribution trace, findings, graph, network intelligence, stages, and executive categories |
 | TXT | Terminal-friendly Origin IP/ranking, summary, inventory, stages, and evidence |
 | CSV | One normalized row per finding with spreadsheet formula-prefix neutralization |
-| PDF | Board-ready summary with Origin exposure alert, attribution procedure, probability chart/ranking, scope, infrastructure, stages, and bounded evidence appendix |
+| PDF | Board-ready summary with Origin assessment, attribution procedure, correlation score ranking, scope, coverage, review decisions, and bounded evidence appendix |
 
 The terminal and TXT `KEY FINDINGS` summary keeps high-signal evidence readable:
 WAF products are grouped with one origin per line, actionable subdomains are split
@@ -671,6 +671,44 @@ cachaza run -d example.com -profile full -active -o example-run -resume
 
 Changing scope in an existing workspace is rejected to prevent evidence from unrelated engagements being mixed.
 
+## Audit quality and follow-up (v1.1)
+
+Origin is presented as a **correlation score out of 100**, with a separate direct-validation result. Legacy JSON `origin_probability*` fields remain deprecated aliases for compatibility, not statistical probabilities. Direct reachability without an established CDN/WAF boundary calls for an architecture review, not a confirmed bypass.
+
+Compare two workspaces with the same authorized scope (both need `report.json`):
+
+```bash
+cachaza diff output/baseline output/current -o changes.json
+```
+
+The comparison reports `added`, `changed`, `not_observed`, and `unchanged`, plus coverage on both sides. **Not observed never means resolved.** Metadata/source changes are observations to review, not automatic vulnerability findings.
+
+Persist operator decisions independently of scanner evidence:
+
+```bash
+cachaza review output/current
+cachaza review output/current -id FINDING_ID -state confirmed -owner "Security team" -notes "Reviewed supporting evidence"
+cachaza review output/current -id FINDING_ID -state resolved -closure-test "External retest denied; evidence retained in ticket SEC-123"
+cachaza report output/current -format html -format pdf -format json
+```
+
+States are `pending`, `confirmed`, `dismissed`, and `resolved`. `FINDING_ID` is the stable ID printed by `review`. Annotations and their history live in `rest/review.json`; HTML supports search and state filtering. PDF includes annotated items; HTML/JSON/TXT carry the full queue. These commands run offline, without update checks or AI calls. Offline `report` replaces the selected generated report files; add `-professional-report` to retain the white-label presentation. It regenerates deterministic content and does not reuse an older AI narrative.
+
+Cached DNS/HTTP/ports/Origin/WAF stages expire after 1 hour, CT/API/subdomains after 24 hours, ASN/cloud after 168 hours, and other stages after 24 hours. The HTML/PDF/TXT coverage view distinguishes collection time from report generation and shows provider failures. Legacy collection timestamps may be unknown.
+
+```bash
+cachaza run -d example.com -profile passive -o current -refresh-stages ct
+cachaza run -d example.com -profile passive -o current -cache-max-age-hours 0
+```
+
+Refreshing a stage invalidates downstream checkpoints, including stages not selected in that invocation. Downstream stages selected for the current run execute again within the existing authorization gates. Old evidence is archived in `rest/history/`; successful refresh replaces that stage's observations, while a failed refresh restores the previous evidence and leaves no reusable checkpoint. Automatic Origin refresh also bypasses its previous direct-validation cache. A version upgrade invalidates old stage checkpoints.
+
+For historical comparisons, keep separate output workspaces per collection date. An in-place refresh updates the current snapshot; it is not a second historical audit. Use `report` when only presentation needs updating.
+
+The HTML evidence and review explorers display 100 items per page; the full evidence remains embedded in the self-contained file. The relationship graph retains its existing grouping controls.
+
+See [the GitHub and Kali upgrade guide](docs/UPGRADE-1.1.0-ES.md).
+
 ## Command reference
 
 | Command | Purpose |
@@ -750,14 +788,14 @@ cachaza -update
 
 Both commands are equivalent.
 
-Once v1.0.8 has been merged into `main` and the `v1.0.8` Release has been published from that same commit, the normal upgrade is:
+Once v1.1.0 has been merged into `main` and the `v1.1.0` Release has been published from that same commit, the normal upgrade is:
 
 ```bash
 cachaza -up
 cachaza -version
 ```
 
-The second command must print `cachaza 1.0.8`.
+The second command must print `cachaza 1.1.0`.
 
 ### Publishing a GitHub Release
 
@@ -768,8 +806,8 @@ Create the tag only after the release pull request has been merged into `main`:
 ```bash
 git switch main
 git pull --ff-only origin main
-git tag -a v1.0.8 -m "Cachaza v1.0.8"
-git push origin v1.0.8
+git tag -a v1.1.0 -m "Cachaza v1.1.0"
+git push origin v1.1.0
 ```
 
 The Release must be public—not a draft or prerelease—so `/releases/latest` and `cachaza -up` can discover it.

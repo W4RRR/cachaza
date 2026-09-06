@@ -99,7 +99,7 @@ def render_html(data: dict[str, Any]) -> str:
                 origin_rows.append(
                     [
                         str(item.get("ip") or "-"),
-                        f"{item.get('origin_probability_percent', item.get('final_score', 0))}%",
+                        f"{item.get('origin_probability_percent', item.get('final_score', 0))}/100",
                         str(item.get("confidence_band") or "inconclusive"),
                         str(item.get("initial_score", 0)),
                         str(item.get("final_score", 0)),
@@ -131,8 +131,8 @@ def render_html(data: dict[str, Any]) -> str:
             cards.append(
                 '<article class="origin-rank-card">'
                 f'<div class="origin-rank-head"><span class="origin-rank-number">#{escape(str(item.get("rank", "-")))}</span>'
-                f'<code>{escape(str(item.get("ip") or "-"))}</code><strong>{probability}%</strong></div>'
-                f'<progress max="100" value="{probability}" aria-label="Origin probability {probability} percent"></progress>'
+                f'<code>{escape(str(item.get("ip") or "-"))}</code><strong>{probability}/100</strong></div>'
+                f'<progress max="100" value="{probability}" aria-label="Origin correlation score {probability} out of 100"></progress>'
                 f'<div class="origin-rank-meta"><span>{escape(str(item.get("confidence_band") or "inconclusive"))}</span>'
                 f'<span>{escape(str(item.get("classification") or "inconclusive"))}</span>'
                 f'<span>{escape(eligibility)}</span></div>'
@@ -154,7 +154,7 @@ def render_html(data: dict[str, Any]) -> str:
         f'<code>{escape(str(origin_ip or "Not identified"))}</code>'
         f'<span class="origin-status-chip {escape(trace_severity)}">'
         f'{escape(str(origin_trace.get("status_label") or "Attribution pending"))}</span></div>'
-        f'<div class="origin-probability"><strong>{origin_probability}%</strong>'
+        f'<div class="origin-probability"><strong>{origin_probability}/100</strong>'
         f'<span>{escape(str(origin.get("confidence_band", "inconclusive") if isinstance(origin, dict) else "inconclusive"))} confidence</span></div>'
         '</div>'
     )
@@ -214,7 +214,7 @@ def render_html(data: dict[str, Any]) -> str:
                 f'<article class="origin-chain-node origin-chain-result {escape(trace_severity)}">'
                 f'<span class="origin-chain-step">{"Leading" if index == 0 else "Additional"} Origin IP</span>'
                 f'<code>{escape(str(outcome.get("ip")))}</code>'
-                f'<strong>{escape(str(outcome.get("probability_percent") or 0))}% · '
+                f'<strong>{escape(str(outcome.get("probability_percent") or 0))}/100 · '
                 f'{escape(str(outcome.get("confidence_band") or "inconclusive"))}</strong>'
                 f'<small>{escape(str(origin_trace.get("status_label") or "Origin candidate"))}</small>'
                 '</article>'
@@ -223,12 +223,12 @@ def render_html(data: dict[str, Any]) -> str:
             "HIGH-PRIORITY EXPOSURE · DIRECT ORIGIN PATH VALIDATED"
             if trace_direct else "ORIGIN ATTRIBUTION · VALIDATION STATUS REQUIRES REVIEW"
         )
-        chain_badge = "Validated bypass" if trace_direct else "Evidence correlation"
+        chain_badge = "Validated bypass" if trace_direct else "Direct path; edge unverified" if trace_status == "direct_reachable_no_boundary" else "Evidence correlation"
         origin_trace_html = (
             f'<div class="origin-exposure-alert {escape(trace_severity)}" role="note">'
             '<div class="origin-alert-icon">!</div><div>'
             f'<span>{escape(exposure_title)}</span>'
-            f'<strong>{escape(str(origin_trace.get("origin_ip")))} is the leading address behind '
+            f'<strong>{escape(str(origin_trace.get("origin_ip")))} - edge assessment: '
             f'{escape(str(origin_trace.get("cdn_waf_provider") or "the observed edge"))}</strong>'
             f'<p>{escape(str(origin_trace.get("summary") or ""))}</p></div></div>'
             '<div class="origin-trace-intro"><div><span class="eyebrow">Attribution chain</span>'
@@ -435,7 +435,7 @@ def render_html(data: dict[str, Any]) -> str:
             ],
         ),
         "__ORIGIN_TABLE__": _table(
-            ["IP", "Origin probability", "Band", "Initial score", "Final score", "Classification", "Group", "Sources", "Rejection reason"],
+            ["IP", "Origin correlation score", "Band", "Initial score", "Final score", "Classification", "Group", "Sources", "Rejection reason"],
             origin_rows,
         ),
     }
@@ -691,7 +691,7 @@ __AI_PANEL__
 <details class="section" open id="origin-discovery-section"><summary>Automatic Origin discovery</summary><div class="section-body"><p class="section-note">__ORIGIN_SUMMARY__</p>__ORIGIN_HERO____ORIGIN_TRACE____ORIGIN_RANKING____ORIGIN_TABLE__</div></details>
 __REMEDIATION_PANEL__
 <details class="section" open id="graph-section"><summary>Interactive relationship explorer</summary><div class="section-body"><p class="section-note">Explore correlations between domains, addresses, infrastructure, technologies and evidence. Search or filter to focus a dense graph.</p><div class="graph-shell" id="graph-shell"><div class="graph-toolbar"><label class="graph-search"><span class="sr-only">Search graph nodes</span><input id="graph-search" type="search" placeholder="Find a domain, IP, ASN, technology…" autocomplete="off"><button class="graph-search-clear" id="clear-graph-search" type="button" title="Clear graph search" aria-label="Clear graph search">×</button></label><div class="graph-actions" role="toolbar" aria-label="Graph controls"><button class="graph-action origin-path-action" id="focus-origin" type="button" title="Focus the leading Origin IP and its attribution path">Origin path</button><div class="layout-switch" role="group" aria-label="Graph layout"><button class="layout-button" id="layout-network" type="button" aria-pressed="true">Network</button><button class="layout-button" id="layout-groups" type="button" aria-pressed="false">Groups</button></div><label class="graph-range-control spacing-control" title="Increase or reduce the distance between nodes"><span class="graph-range-label">Spacing</span><input class="spacing-range" id="graph-spacing" type="range" min="60" max="180" value="100" step="10" aria-label="Node spacing"><output class="spacing-value" id="graph-spacing-value">100%</output></label><button class="graph-action" id="zoom-out" type="button" title="Zoom out" aria-label="Zoom out">&minus;</button><label class="graph-range-control zoom-control" title="Graph zoom"><span class="sr-only">Zoom</span><input class="zoom-range" id="graph-zoom" type="range" min="25" max="260" value="100" step="5" aria-label="Graph zoom"><output class="zoom-value" id="graph-zoom-value">100%</output></label><button class="graph-action" id="zoom-in" type="button" title="Zoom in" aria-label="Zoom in">+</button><button class="graph-action" id="fit-graph" type="button" title="Fit all visible nodes">Fit</button><button class="graph-action" id="fullscreen-graph" type="button" title="Expand graph" aria-label="Expand graph">&#x26F6;</button><button class="graph-action" id="reset-graph" type="button" title="Reset filters, spacing, and layout">Reset</button></div></div><div class="graph-status-strip"><span class="graph-metric"><strong id="visible-node-count">0</strong> nodes</span><span class="graph-metric"><strong id="visible-edge-count">0</strong> relationships</span><span class="graph-metric"><strong id="visible-kind-count">0</strong> types</span><span class="graph-selection-status" id="graph-selection-status">Select a node to reveal its correlation path</span></div><div class="graph-layout"><div class="graph-canvas" id="graph-canvas"><svg id="relationship-graph" role="img" aria-labelledby="graph-title graph-description"><title id="graph-title">Reconnaissance relationship graph</title><desc id="graph-description">Interactive network of domains, addresses, infrastructure, technologies and evidence.</desc></svg><div class="graph-tooltip" id="graph-tooltip" role="tooltip"></div>__GRAPH_ORIGIN_ALERT__<div class="graph-help">Orange dashed relationships show the Origin attribution chain · wheel or +/− zooms · drag the background to pan</div></div><aside class="graph-inspector" id="graph-inspector" aria-live="polite"><div class="inspector-empty"><div><div class="inspector-empty-icon">◎</div><h3>Nothing selected</h3><p>Select a node to inspect its evidence and connected relationships.</p></div></div></aside></div><div class="legend" id="graph-legend" aria-label="Filter nodes by type"></div></div></div></details>
-<details class="section" open id="evidence-section"><summary>Complete evidence explorer</summary><div class="section-body"><div class="controls"><label class="field"><span>Search findings and metadata</span><input id="evidence-search" type="search" placeholder="Domain, ASN, source, provider…"></label><label class="field"><span>Finding type</span><select id="evidence-kind"><option value="">All types</option></select></label><button class="action" id="show-all-evidence" type="button">Show all</button></div><p class="evidence-status" id="evidence-status" aria-live="polite"></p><div id="evidence-list"></div></div></details>
+<details class="section" open id="evidence-section"><summary>Complete evidence explorer</summary><div class="section-body"><div class="controls"><label class="field"><span>Search findings and metadata</span><input id="evidence-search" type="search" placeholder="Domain, ASN, source, provider…"></label><label class="field"><span>Finding type</span><select id="evidence-kind"><option value="">All types</option></select></label><button class="action" id="show-all-evidence" type="button">Show all</button></div><button class="action" id="evidence-prev" type="button">Previous page</button><button class="action" id="evidence-next" type="button">Next page</button><p class="evidence-status" id="evidence-status" aria-live="polite"></p><div id="evidence-list"></div></div></details>
 <details class="section"><summary>ASN intelligence</summary><div class="section-body">__ASN_TABLE__</div></details>
 <details class="section"><summary>Network organizations</summary><div class="section-body">__ORG_TABLE__</div></details>
 <details class="section"><summary>Prefixes</summary><div class="section-body">__PREFIX_TABLE__</div></details>
@@ -699,6 +699,8 @@ __REMEDIATION_PANEL__
 <details class="section"><summary>Network registrations</summary><div class="section-body">__REGISTRATION_TABLE__</div></details>
 <details class="section"><summary>External source status</summary><div class="section-body"><p class="section-note">Retrieved counts what a CT source returned; New counts evidence records added to this workspace. Empty is a valid response, while partial/error identifies a source availability issue.</p>__SOURCE_TABLE__</div></details>
 <details class="section"><summary>Provider execution status</summary><div class="section-body"><p class="section-note">Credential presence is not acceptance. Censys 401 means an invalid Platform PAT; 403 means the accepted account is not entitled to the requested endpoint. IntelX keys must be used with the exact API URL assigned in the Developer tab.</p>__PROVIDER_TABLE__</div></details>
+<details class="section" open><summary>Coverage and freshness</summary><div class="section-body">__COVERAGE__</div></details>
+<details class="section" id="review-section"><summary>Review queue</summary><div class="section-body"><p>Operator annotations are independent of scanner confidence. Save decisions with <code>cachaza review WORKSPACE -id ID -state confirmed -owner NAME -notes TEXT</code> and regenerate with <code>cachaza report WORKSPACE</code>.</p><div class="controls"><label>State <select id="review-state"><option value="">All</option><option>pending</option><option>confirmed</option><option>dismissed</option><option>resolved</option></select></label><label>Search <input id="review-search" type="search"></label><button class="action" id="review-prev" type="button">Previous page</button><button class="action" id="review-next" type="button">Next page</button></div><p id="review-count" aria-live="polite"></p><div id="review-list"></div></div></details>
 <details class="section"><summary>Execution stages</summary><div class="section-body">__STAGE_TABLE__</div></details>
 </main><script type="application/json" id="report-data">__REPORT_JSON__</script><script>
 (() => {
@@ -709,8 +711,17 @@ const kinds=[...new Set(findings.map(item=>String(item.kind||"finding")))].sort(
 const valueText=value=>value===null||value===undefined||value===""?"-":typeof value==="object"?JSON.stringify(value,null,2):String(value);
 function addRow(dl,key,value){const dt=document.createElement("dt"),dd=document.createElement("dd");dt.textContent=key;dd.textContent=valueText(value);dl.append(dt,dd)}
 function findingElement(finding){const item=document.createElement("details");item.className="finding";const summary=document.createElement("summary"),kind=document.createElement("span"),value=document.createElement("span"),source=document.createElement("span"),scope=document.createElement("span");kind.className="finding-kind";kind.textContent=finding.kind||"finding";value.className="finding-value";value.textContent=finding.value||"-";source.className="finding-source muted";source.textContent=finding.source||"unknown source";scope.className="badge"+(finding.in_scope?" scope":"");scope.textContent=finding.in_scope?"In scope":"Contextual";summary.append(kind,value,source,scope);const body=document.createElement("div"),metadata=document.createElement("dl");body.className="finding-body";metadata.className="metadata";addRow(metadata,"stage",finding.stage);addRow(metadata,"source",finding.source);addRow(metadata,"scope",finding.in_scope?"in scope":"contextual / out of scope");addRow(metadata,"observed_at",finding.observed_at);const raw=finding.metadata&&typeof finding.metadata==="object"?finding.metadata:{};Object.keys(raw).sort().forEach(key=>addRow(metadata,key,raw[key]));body.append(metadata);item.append(summary,body);return item}
-function renderEvidence(){const query=search.value.trim().toLowerCase(),selected=kindSelect.value,matching=findings.filter(finding=>(!selected||finding.kind===selected)&&(!query||JSON.stringify(finding).toLowerCase().includes(query)));list.replaceChildren(...matching.map(findingElement));status.textContent=`Showing ${matching.length} of ${findings.length} findings`;document.querySelectorAll(".stat").forEach(card=>card.setAttribute("aria-pressed",String(Boolean(selected)&&card.dataset.kind===selected)))}
-kinds.forEach(kind=>{const option=document.createElement("option");option.value=kind;option.textContent=kind;kindSelect.append(option)});search.addEventListener("input",renderEvidence);kindSelect.addEventListener("change",renderEvidence);document.getElementById("show-all-evidence").addEventListener("click",()=>{search.value="";kindSelect.value="";renderEvidence()});document.querySelectorAll(".stat").forEach(card=>card.addEventListener("click",()=>{const kind=card.dataset.kind||"";kindSelect.value=kindSelect.value===kind?"":kind;search.value="";evidenceSection.open=true;renderEvidence();evidenceSection.scrollIntoView({behavior:"smooth",block:"start"})}));renderEvidence();
+const evidenceIndex=findings.map(f=>JSON.stringify(f).toLowerCase());
+let evidencePage=0,evidenceTimer; const pageSize=100;
+function renderEvidence(){const query=search.value.trim().toLowerCase(),selected=kindSelect.value,matching=findings.filter((finding,index)=>(!selected||finding.kind===selected)&&(!query||evidenceIndex[index].includes(query)));const pages=Math.max(1,Math.ceil(matching.length/pageSize));evidencePage=Math.min(evidencePage,pages-1);list.replaceChildren(...matching.slice(evidencePage*pageSize,(evidencePage+1)*pageSize).map(findingElement));status.textContent=`${matching.length} matching of ${findings.length} findings · Page ${evidencePage+1}/${pages}`;document.getElementById("evidence-prev").disabled=evidencePage===0;document.getElementById("evidence-next").disabled=evidencePage>=pages-1;document.querySelectorAll(".stat").forEach(card=>card.setAttribute("aria-pressed",String(Boolean(selected)&&card.dataset.kind===selected)))}
+function resetEvidence(){evidencePage=0;renderEvidence()}
+kinds.forEach(kind=>{const option=document.createElement("option");option.value=kind;option.textContent=kind;kindSelect.append(option)});
+search.addEventListener("input",()=>{clearTimeout(evidenceTimer);evidenceTimer=setTimeout(resetEvidence,180)});kindSelect.addEventListener("change",resetEvidence);
+document.getElementById("evidence-prev").addEventListener("click",()=>{evidencePage--;renderEvidence()});document.getElementById("evidence-next").addEventListener("click",()=>{evidencePage++;renderEvidence()});
+document.getElementById("show-all-evidence").addEventListener("click",()=>{search.value="";kindSelect.value="";resetEvidence()});document.querySelectorAll(".stat").forEach(card=>card.addEventListener("click",()=>{const kind=card.dataset.kind||"";kindSelect.value=kindSelect.value===kind?"":kind;search.value="";evidenceSection.open=true;resetEvidence();evidenceSection.scrollIntoView({behavior:"smooth",block:"start"})}));renderEvidence();
+const reviewRows=report.review_queue||[],reviewFilter=document.getElementById("review-state"),reviewSearch=document.getElementById("review-search"),reviewList=document.getElementById("review-list");let reviewPage=0;
+function renderReview(){const query=reviewSearch.value.toLowerCase();const rows=reviewRows.filter(row=>(!reviewFilter.value||row.state===reviewFilter.value)&&(!query||JSON.stringify(row).toLowerCase().includes(query)));reviewPage=Math.max(0,Math.min(reviewPage,Math.ceil(rows.length/pageSize)-1));reviewList.replaceChildren();rows.slice(reviewPage*pageSize,(reviewPage+1)*pageSize).forEach(row=>{const item=document.createElement("details"),title=document.createElement("summary"),body=document.createElement("dl");title.textContent=`${row.state} · ${row.kind}: ${row.value}`;body.className="metadata";["id","sources","owner","notes","closure_test","updated_at"].forEach(k=>addRow(body,k,row[k]));item.append(title,body);reviewList.append(item)});document.getElementById("review-count").textContent=`${rows.length} items · Page ${reviewPage+1}/${Math.max(1,Math.ceil(rows.length/pageSize))}`;document.getElementById("review-prev").disabled=reviewPage===0;document.getElementById("review-next").disabled=(reviewPage+1)*pageSize>=rows.length}
+reviewFilter.addEventListener("change",()=>{reviewPage=0;renderReview()});reviewSearch.addEventListener("input",()=>{reviewPage=0;renderReview()});document.getElementById("review-prev").addEventListener("click",()=>{reviewPage--;renderReview()});document.getElementById("review-next").addEventListener("click",()=>{reviewPage++;renderReview()});renderReview();
 
 const svg=document.getElementById("relationship-graph"),shell=document.getElementById("graph-shell"),canvas=document.getElementById("graph-canvas"),tooltip=document.getElementById("graph-tooltip"),inspector=document.getElementById("graph-inspector"),graphSearch=document.getElementById("graph-search"),zoomSlider=document.getElementById("graph-zoom"),zoomOutput=document.getElementById("graph-zoom-value"),spacingSlider=document.getElementById("graph-spacing"),spacingOutput=document.getElementById("graph-spacing-value"),selectionStatus=document.getElementById("graph-selection-status");
 const graph=report.graph||{nodes:[],edges:[]},nodes=Array.isArray(graph.nodes)?graph.nodes.map(node=>({...node})):[],byId=new Map(nodes.map(node=>[node.id,node])),edges=(Array.isArray(graph.edges)?graph.edges:[]).filter(edge=>byId.has(edge.source)&&byId.has(edge.target));
@@ -781,7 +792,7 @@ function emptyInspector(){inspector.innerHTML='<div class="inspector-empty"><div
 function renderInspector(node){
   inspector.replaceChildren();const visual=styleFor(node.kind),hero=document.createElement("div"),icon=document.createElement("div"),title=document.createElement("div"),heading=document.createElement("h3"),type=document.createElement("p");hero.className="inspector-hero";icon.className="inspector-icon";icon.style.background=visual.color;icon.textContent=visual.icon;title.className="inspector-title";heading.textContent=node.label;type.textContent=kindName(node.kind);title.append(heading,type);hero.append(icon,title);
   const badges=document.createElement("div");badges.className="inspector-badges";[[node.in_scope?"In scope":"Contextual",node.in_scope?"inspector-badge authorized":"inspector-badge"],...(node.validation?[[node.validation,"inspector-badge"]]:[]),[`${node.evidence_count||0} evidence`,"inspector-badge"],[`${node.degree} links`,"inspector-badge"]].forEach(([text,className])=>{const badge=document.createElement("span");badge.className=className;badge.textContent=text;badges.append(badge)});inspector.append(hero,badges);
-  if(node.kind==="origin_candidate"){const facts=document.createElement("dl");facts.className="inspector-facts";[["Priority",node.is_primary_origin?"Leading Origin IP":"Candidate"],["Exposure status",node.validation||"Origin candidate"],["Origin probability",`${node.origin_probability_percent||0}%`],["Confidence",node.confidence_band||"inconclusive"],["Classification",node.classification||"inconclusive"],["Method",node.probability_method||"heuristic correlation score"]].forEach(([key,value])=>addRow(facts,key,value));inspector.append(facts)}
+  if(node.kind==="origin_candidate"){const facts=document.createElement("dl");facts.className="inspector-facts";[["Priority",node.is_primary_origin?"Leading Origin IP":"Candidate"],["Exposure status",node.validation||"Origin candidate"],["Origin correlation score",`${node.origin_probability_percent||0}/100`],["Confidence",node.confidence_band||"inconclusive"],["Classification",node.classification||"inconclusive"],["Method",node.probability_method||"heuristic correlation score"]].forEach(([key,value])=>addRow(facts,key,value));inspector.append(facts)}
   if(node.kind==="origin_technique"){const facts=document.createElement("dl");facts.className="inspector-facts";[["Step",node.stage_number||"-"],["Tactic",node.tactic||"-"],["Technique",node.technique||"-"],["Status",node.validation||"unknown"],["Procedure",node.procedure||"-"],["Tools",(node.tools||[]).join(", ")||"-"]].forEach(([key,value])=>addRow(facts,key,value));inspector.append(facts);if((node.stage_evidence||[]).length){const block=document.createElement("div"),heading=document.createElement("h4"),items=document.createElement("div");block.className="inspector-block";heading.textContent="Attribution evidence";items.className="source-list";node.stage_evidence.slice(0,12).forEach(value=>{const pill=document.createElement("span");pill.className="source-pill";pill.textContent=value;items.append(pill)});block.append(heading,items);inspector.append(block)}}
   const sources=document.createElement("div"),sourcesTitle=document.createElement("h4"),sourceList=document.createElement("div");sources.className="inspector-block";sourcesTitle.textContent="Evidence sources";sourceList.className="source-list";(node.sources||[]).forEach(value=>{const pill=document.createElement("span");pill.className="source-pill";pill.textContent=value;sourceList.append(pill)});if(!sourceList.children.length){const none=document.createElement("span");none.className="muted";none.textContent="No source metadata";sourceList.append(none)}sources.append(sourcesTitle,sourceList);inspector.append(sources);
   const relationBlock=document.createElement("div"),relationTitle=document.createElement("h4"),relationList=document.createElement("div"),relations=(adjacency.get(node.id)||[]).map(edge=>({edge,other:byId.get(edge.source===node.id?edge.target:edge.source),outgoing:edge.source===node.id})).filter(item=>item.other&&visible(item.other)).sort((a,b)=>a.edge.relationship.localeCompare(b.edge.relationship)||a.other.label.localeCompare(b.other.label));relationBlock.className="inspector-block";relationTitle.textContent=`Connected relationships (${relations.length})`;relationList.className="relation-list";
@@ -874,7 +885,7 @@ if(nodes.length){nodes.forEach(updateNode);updateEdges();updateVisibility();if(p
                 f"Mode {origin.get('mode', 'not run')}; CDN/WAF {origin.get('cdn_waf_detected', {}).get('provider', 'Unknown')}; "
                 f"{origin.get('candidates_collected', 0)} candidates; {origin.get('direct_requests_performed', 0)} direct requests. "
                 f"Origin IP: {origin.get('origin_ip') or origin.get('highest_confidence_candidate') or 'none'} "
-                f"({origin.get('origin_probability_percent', origin.get('confidence_score', 0))}%, {origin.get('confidence_band', 'inconclusive')}). "
+                f"({origin.get('origin_probability_percent', origin.get('confidence_score', 0))}/100, {origin.get('confidence_band', 'inconclusive')}). "
                 f"{origin.get('probability_notice', '')} {origin.get('warning', '')}"
             ) if isinstance(origin, dict) and origin else "Automatic Origin discovery was not run."
         ),
@@ -889,6 +900,19 @@ if(nodes.length){nodes.forEach(updateNode);updateEdges();updateVisibility();if(p
         "__ZONE_WARNING__": zone_warning,
         **tables,
     }
+    cov = data.get("coverage", {})
+    replacements["__COVERAGE__"] = (
+        "<p>" + escape(cov.get("notice", "Coverage unavailable in this legacy report.")) + "</p>"
+        + _table(["Stage", "State", "Records", "Freshness", "Evidence collected", "TTL (hours)"],
+                 [[r["name"], r.get("status", "unknown"), str(r.get("evidence_count", 0)), r.get("freshness", "unknown"), r.get("evidence_at") or "unknown", str(r.get("max_age_hours", "-"))] for r in cov.get("stages", [])])
+        + _table(["Provider", "Group", "State", "Diagnostic"],
+                 [[r["name"], r["group"], r.get("status", "unknown"), str(r.get("action") or r.get("error") or "-")] for r in cov.get("providers", [])])
+    )
+    if data.get("origin_remediation", {}).get("posture") == "review_architecture":
+        replacements["__REMEDIATION_PANEL__"] = remediation_panel.replace("How to remediate the Origin exposure", "Review the intended public architecture")
+        template = template.replace("How to remediate the Origin exposure", "Review the intended public architecture")
+    if professional:
+        template = template.replace("cachaza review WORKSPACE -id ID -state confirmed -owner NAME -notes TEXT", "review WORKSPACE -id ID -state confirmed -owner NAME -notes TEXT").replace("cachaza report WORKSPACE", "report WORKSPACE")
     for placeholder, value in replacements.items():
         template = template.replace(placeholder, value)
     return template.replace("__REPORT_JSON__", report_json)

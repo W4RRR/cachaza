@@ -22,6 +22,23 @@ STREET = re.compile(
 )
 
 
+def normalize_phone(value: str) -> str | None:
+    """Conservative normalization; do not infer a country from the audit domain."""
+    value = value.strip()
+    if not re.fullmatch(r"\+?[\d\s().-]+", value):
+        return None
+    parts = re.findall(r"\d+", value)
+    years = [part for part in parts if len(part) == 4 and 1900 <= int(part) <= 2099]
+    if not value.startswith("+") and (len(years) >= 2 or (parts and parts[0] in years and sum(map(len, parts)) <= 8)):
+        return None
+    if re.fullmatch(r"\d{1,3}\s+\d{5}", value) or re.fullmatch(r"\d{5}-\d{4}", value):
+        return None
+    digits = "".join(parts)
+    if not 8 <= len(digits) <= 15:
+        return None
+    return ("+" if value.startswith("+") else "") + digits
+
+
 def _decode_cfemail(value: str) -> str | None:
     try:
         raw = bytes.fromhex(value)
@@ -108,7 +125,7 @@ def parse_html(source_url: str, body: str, root: str, target: TargetSpec) -> lis
     for match in PHONE.finditer(visible):
         value = re.sub(r"\s+", " ", match.group(0)).strip(" .,-")
         digits = sum(character.isdigit() for character in value)
-        if 8 <= digits <= 16:
+        if 8 <= digits <= 15 and normalize_phone(value):
             candidates.append(("phone", value))
     candidates.extend(("address", re.sub(r"\s+", " ", match.group(0)).strip(" .,")) for match in STREET.finditer(visible))
     for raw in parser.json_ld:
@@ -132,6 +149,9 @@ def parse_html(source_url: str, body: str, root: str, target: TargetSpec) -> lis
     )
     accepted_digits: list[str] = []
     for item in phone_candidates:
+        normalized = normalize_phone(item[1])
+        if not normalized:
+            continue
         digits = "".join(character for character in item[1] if character.isdigit())
         if re.fullmatch(r"\d{5}-\d{4}", item[1].strip()):
             continue

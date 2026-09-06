@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 1.1.0 - 2026-09-06
+
+- Display Origin correlation as a score out of 100, independently of direct validation. Retain legacy JSON probability aliases and add explicit score fields.
+- Do not label a direct application match as a CDN/WAF bypass when no protected public boundary was established; provide an architecture review instead of an unwarranted containment plan.
+- Add offline `diff`, `review`, and `report` commands with stable finding IDs, persisted operator annotations, closure evidence, and explicit not-observed semantics.
+- Add per-stage cache expiration, selective refresh with downstream invalidation, historical evidence snapshots and rollback on failed refresh.
+- Add coverage/freshness and review views to HTML, JSON, TXT and PDF; paginate and debounce the HTML evidence explorer.
+- Filter year sequences and postcode fragments from phone candidates; normalize executive phone summaries across tools.
+- Separate audit operations and Origin assessment policy from CLI/report layout modules.
+- Run tests and wheel installation checks on pull requests with Python 3.11, 3.12 and 3.13.
+
 - Added semantic ANSI colors to the final automatic Origin discovery summary and its `report.txt` counterpart, while preserving plain output with `-nc` / `--no-color`.
 
 ## 1.0.8 - 2026-08-28

@@ -8,6 +8,7 @@ import re
 import shutil
 import sys
 import tempfile
+import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -62,6 +63,7 @@ from .sources import (
 )
 from .workspace import RunWorkspace
 from .web import select_live_http_origins
+from .audit import STAGE_TTL_HOURS
 from .adapters import (
     blackwidow,
     cariddi,
@@ -148,6 +150,8 @@ class RunOptions:
     blackwidow_depth: int | None = None
     blackwidow_path: str | None = None
     origin: OriginConfig | None = None
+    refresh_stages: list[str] = field(default_factory=list)
+    cache_max_age_hours: float | None = None
 
 
 class Pipeline:
@@ -169,6 +173,7 @@ class Pipeline:
         )
         self.failures: list[str] = []
         self._wappalyzer_executed = False
+        self._refresh_downstream = False
         self.credentials = load_credentials(options.api_config)
         self._seed_scope()
 
@@ -178,6 +183,8 @@ class Pipeline:
         # evidence. Excluding them lets an operator extend a resumed run while
         # retaining valid checkpoints from the shorter profile.
         for key in (
+            "refresh_stages",
+            "cache_max_age_hours",
             "stages",
             "profile",
             "report_formats",
@@ -267,7 +274,8 @@ class Pipeline:
 
     def _run_stage(self, name: str, function: Callable[[], str | None]) -> None:
         cache_key = self._stage_cache_key(name)
-        if self.workspace.resume and self.workspace.checkpoint_matches(name, cache_key):
+        ttl = self.options.cache_max_age_hours if self.options.cache_max_age_hours is not None else STAGE_TTL_HOURS.get(name, 24)
+        if self.workspace.resume and not self._refresh_downstream and name not in self.options.refresh_stages and self.workspace.checkpoint_matches(name, cache_key, ttl):
             now = utc_now()
             status = StageStatus(
                 name=name,
@@ -275,25 +283,47 @@ class Pipeline:
                 started_at=now,
                 finished_at=now,
                 details="completed stage reused from a compatible workspace",
+                evidence_at=self.workspace.checkpoint_time(name),
+                max_age_hours=ttl,
             )
             self.workspace.stages.append(status)
             self.console.info(f"Stage: {name} (cached)")
             return
-        status = StageStatus(name=name, status="running", started_at=utc_now())
+        previous = list(self.workspace.findings)
+        if self.workspace.resume and not self.options.dry_run:
+            if not self._refresh_downstream:
+                reused = {stage.name for stage in self.workspace.stages if stage.status == "cached"}
+                for checkpoint in self.workspace.stage_state.glob("*.json"):
+                    if checkpoint.stem not in reused:
+                        checkpoint.unlink()
+            self._refresh_downstream = True
+            # Retain the previous evidence before replacement; failed refreshes restore it.
+            old = [item for item in previous if item.stage == name]
+            if old:
+                self.workspace.write_json(f"history/{name}-{uuid.uuid4().hex}.json", [item.to_dict() for item in old])
+            self.workspace.refreshing_stages.add(name)
+            (self.workspace.stage_state / f"{name}.json").unlink(missing_ok=True)
+            self.workspace.replace_findings([item for item in previous if item.stage != name])
+        status = StageStatus(name=name, status="running", started_at=utc_now(), max_age_hours=ttl)
         self.workspace.stages.append(status)
         self.console.info(f"Stage: {name}")
         try:
             details = function()
             status.status = "completed"
             status.details = details or ""
+            status.evidence_at = utc_now() if not self.options.dry_run else None
             if not self.options.dry_run:
                 self.workspace.write_checkpoint(name, cache_key, status.details)
             self.console.debug(f"Completed {name}: {status.details or 'no additional details'}")
         except KeyboardInterrupt:
+            if self.workspace.resume and not self.options.dry_run:
+                self.workspace.replace_findings(previous)
             status.status = "interrupted"
             status.details = "interrupted by the user"
             raise
         except Exception as exc:  # stages are fault-isolated unless -strict
+            if self.workspace.resume and not self.options.dry_run:
+                self.workspace.replace_findings(previous)
             status.status = "failed"
             status.details = str(exc)
             self.failures.append(f"{name}: {exc}")

@@ -59,7 +59,7 @@ ORIGIN_WARNING = (
 )
 
 ORIGIN_PROBABILITY_NOTICE = (
-    "Origin probability is the bounded Cachaza correlation score expressed as a percentage; "
+    "Origin correlation score is a bounded heuristic on a 0-100 scale; "
     "it is heuristic, not a statistically calibrated probability or proof of ownership."
 )
 
@@ -1933,6 +1933,8 @@ class OriginEngine:
                 for item in probable
             ],
             "origin_probability": highest.origin_probability if highest else 0.0,
+            "correlation_score": highest.origin_probability_percent if highest else 0,
+            "score_scale": 100,
             "origin_probability_percent": highest.origin_probability_percent if highest else 0,
             "confidence_band": highest.confidence_band if highest else "inconclusive",
             "highest_confidence_candidate": highest.ip if highest else None,
@@ -1951,7 +1953,7 @@ class OriginEngine:
         }
 
     def _cached_validations(self) -> dict[str, dict[str, Any]]:
-        if not self.workspace.resume:
+        if not self.workspace.resume or "origin" in self.workspace.refreshing_stages:
             return {}
         path = self.directory / "validation-results.jsonl"
         if not path.is_file():
@@ -2201,7 +2203,7 @@ def render_origin_summary(ranking: dict[str, Any], *, color: bool = True) -> str
         row("Candidates actively validated", ranking.get("candidates_actively_validated", 0), "1;32"),
         row("Direct requests performed", ranking.get("direct_requests_performed", 0), "1;36"),
         row("Origin IP", highest, origin_code),
-        row("Origin probability", f"{probability}%", probability_code),
+        row("Origin correlation score", f"{probability}/100", probability_code),
         row("Confidence band", confidence, probability_code),
         row("Classification", classification, probability_code),
         row("Manual confirmation recommended", "yes", "1;33"),
