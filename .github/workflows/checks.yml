@@ -11,8 +11,6 @@ jobs:
     strategy:
       matrix:
         python: ['3.11', '3.12', '3.13']
-    env:
-      CACHAZA_SKIP_UPDATE_CHECK: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,6 +21,8 @@ jobs:
       - run: git diff --check
       - run: python -m build
       - name: Verify wheel installation outside source checkout
+        env:
+          CACHAZA_SKIP_UPDATE_CHECK: '1'
         shell: bash
         run: |
           python -m venv "$RUNNER_TEMP/wheel-check"
