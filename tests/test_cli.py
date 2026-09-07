@@ -736,6 +736,22 @@ class CliTests(unittest.TestCase):
             self.assertEqual(stdout.getvalue(), "")
             self.assertEqual(stderr.getvalue(), "")
 
+    def test_redirected_stdout_keeps_final_mini_summary_visible_on_stderr(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "run"
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                code = main([
+                    "run", "-d", "example.com", "-dry-run", "-stages", "asn",
+                    "-format", "html", "-o", str(root), "-nc",
+                ])
+            self.assertEqual(code, 0)
+            for output in (stdout.getvalue(), stderr.getvalue()):
+                self.assertIn("KEY FINDINGS", output)
+                self.assertIn("Output directory:", output)
+                self.assertIn("Recommended next step:", output)
+
 
 if __name__ == "__main__":
     unittest.main()

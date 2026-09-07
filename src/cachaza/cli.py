@@ -924,14 +924,20 @@ def command_run(args: argparse.Namespace, console: Console) -> int:
     )
     root = Pipeline(target, workspace, options, console).execute()
     if not args.silent:
-        print(f"Output directory: {root}")
+        def summary(message: str) -> None:
+            print(message, flush=True)
+            if not sys.stdout.isatty():
+                print(message, file=sys.stderr, flush=True)
+            console.log(message, source="SUMMARY")
+
+        summary(f"Output directory: {root}")
         for report_format in report_formats:
             report = root / f"report.{report_format}"
             if report.is_file():
-                print(f"{report_format.upper()} report: {report}")
-        print(f"Supporting artifacts: {root / 'rest'}")
-        print(f"Full execution log: {root / 'rest' / 'execution.log'}")
-        print(
+                summary(f"{report_format.upper()} report: {report}")
+        summary(f"Supporting artifacts: {root / 'rest'}")
+        summary(f"Full execution log: {root / 'rest' / 'execution.log'}")
+        summary(
             render_key_findings_console(
                 build_key_findings(workspace.findings),
                 subdomain_summary=build_subdomain_summary(workspace.findings),
@@ -950,13 +956,13 @@ def command_run(args: argparse.Namespace, console: Console) -> int:
                 if isinstance(status, dict) and status.get("status") == "error"
             ]
             if provider_issues:
-                print("\n" + console.paint("PROVIDER ISSUES", "1;31"))
-                print(console.paint("---------------", "31"))
+                summary("\n" + console.paint("PROVIDER ISSUES", "1;31"))
+                summary(console.paint("---------------", "31"))
                 for name, status in provider_issues:
                     code = status.get("http_status")
                     action = status.get("action") or status.get("error") or "Review provider credentials."
                     suffix = f" HTTP {code}" if code else ""
-                    print(
+                    summary(
                         console.paint(f"{name}{suffix}", "1;31")
                         + ": " + console.paint(str(action), "33")
                     )
@@ -967,15 +973,15 @@ def command_run(args: argparse.Namespace, console: Console) -> int:
             except json.JSONDecodeError:
                 ranking = {}
             if ranking:
-                print("\n" + render_origin_summary(ranking, color=not args.no_color))
+                summary("\n" + render_origin_summary(ranking, color=not args.no_color))
         html_report = root / "report.html"
         if html_report.is_file():
-            print(
+            summary(
                 "\nRecommended next step: open the HTML report; it contains the richest "
                 f"interactive analysis:\n  {html_report}"
             )
         else:
-            print(
+            summary(
                 "\nRecommended next step: generate and open report.html with -format html "
                 "or -format all; it contains the richest interactive analysis."
             )

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.1.2 - 2026-09-07
+
+- Keep the final report paths, key findings, provider issues, Origin summary and recommended next step visible in the terminal when standard output is redirected, while retaining the same summary in redirected output and the execution log.
+
 ## 1.1.1 - 2026-09-07
 
 - Collapse URL nodes into host groups; expand 50 URLs at a time, collapse them again, or reveal a URL through graph search. Preserve the complete evidence graph in structured data.
