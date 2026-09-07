@@ -12,7 +12,6 @@ import ipaddress
 import io
 import json
 import re
-from html import escape as html_escape
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -20,6 +19,7 @@ from xml.sax.saxutils import escape as xml_escape
 
 from .ai_reporting import AIReportConfig, generate_ai_assistance
 from .html_report import render_html
+from .report_common import _evidence_value
 from .http import HttpError
 from .models import Finding, TargetSpec, utc_now
 from .workspace import RunWorkspace
@@ -928,24 +928,6 @@ def build_report_data(
     return data
 
 
-def _evidence_value(entry: dict[str, Any], *keys: str) -> str:
-    values: list[str] = []
-    for metadata in entry.get("evidence", []):
-        for key in keys:
-            raw = metadata.get(key)
-            if isinstance(raw, bool):
-                value = "yes" if raw else "no"
-            elif isinstance(raw, list):
-                value = ", ".join(str(item).strip() for item in raw if str(item).strip())
-            elif raw is not None:
-                value = str(raw).strip()
-            else:
-                value = ""
-            if value and value not in values:
-                values.append(value)
-    return ", ".join(values)
-
-
 def _render_txt(data: dict[str, Any], *, color: bool = True) -> str:
     """Render a detailed terminal-friendly report, optionally with ANSI colors."""
 
@@ -1277,89 +1259,6 @@ def _render_csv(data: dict[str, Any]) -> str:
             )
         )
     return output.getvalue()
-
-
-def _html_table(headers: list[str], rows: list[list[str]]) -> str:
-    head = "".join(f"<th>{html_escape(value)}</th>" for value in headers)
-    if rows:
-        body = "".join(
-            "<tr>" + "".join(f"<td>{html_escape(str(value))}</td>" for value in row) + "</tr>"
-            for row in rows
-        )
-    else:
-        body = f'<tr><td colspan="{len(headers)}" class="empty">No findings</td></tr>'
-    return f"<div class=\"table-wrap\"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>"
-
-
-def _render_html_legacy(data: dict[str, Any]) -> str:
-    network = data["network_intelligence"]
-    asn_rows = [
-        [
-            item["value"],
-            _evidence_value(item, "holder", "as_name") or "Unknown",
-            _evidence_value(item, "announced") or "Unknown",
-            "Authorized" if item["in_scope"] else "Candidate",
-            ", ".join(item["sources"]),
-        ]
-        for item in network["asns"]
-    ]
-    org_rows = [
-        [item["value"], _evidence_value(item, "asn") or "-", ", ".join(item["sources"])]
-        for item in network["organizations"]
-    ]
-    prefix_rows = [
-        [
-            item["value"],
-            _evidence_value(item, "asn") or "-",
-            "Authorized" if item["in_scope"] else "Candidate",
-            ", ".join(item["sources"]),
-        ]
-        for item in network["prefixes"]
-    ]
-    ip_rows = [
-        [item["value"], _evidence_value(item, "asn", "asns") or "-", ", ".join(item["sources"])]
-        for item in network["resolved_ips"]
-    ]
-    registration_rows = [
-        [
-            item["value"],
-            _evidence_value(item, "handle") or "-",
-            _evidence_value(item, "start_address", "end_address") or "-",
-            ", ".join(item["sources"]),
-        ]
-        for item in network["registrations"]
-    ]
-    stage_rows = [
-        [item["name"], item["status"], item.get("details", "")] for item in data["stages"]
-    ]
-    counts = "".join(
-        f'<div class="stat"><span>{html_escape(str(count))}</span>{html_escape(kind)}</div>'
-        for kind, count in data["counts"].items()
-    ) or '<div class="stat"><span>0</span>findings</div>'
-    domains = ", ".join(data["scope"].get("domains", [])) or "No domains supplied"
-    return f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
-<title>Cachaza report</title><style>
-:root{{--bg:#07111f;--panel:#0e1b2d;--line:#253750;--text:#e8f0fa;--muted:#9db0c8;--accent:#53d3a4;--blue:#63a8ff}}
-*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font:14px/1.55 Inter,Segoe UI,Arial,sans-serif}}
-main{{max-width:1180px;margin:auto;padding:38px 24px 70px}}header{{border:1px solid var(--line);border-radius:18px;padding:30px;background:linear-gradient(135deg,#112641,#0c1b2d)}}
-h1{{margin:0;font-size:34px;letter-spacing:.02em}}h2{{margin:34px 0 12px;font-size:20px}}.eyebrow{{color:var(--accent);font-weight:700;text-transform:uppercase;letter-spacing:.14em}}
-.muted{{color:var(--muted)}}.stats{{display:flex;gap:12px;flex-wrap:wrap;margin-top:20px}}.stat{{min-width:120px;padding:13px 16px;border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--muted)}}
-.stat span{{display:block;color:var(--text);font-size:24px;font-weight:750}}.callout{{border-left:4px solid var(--accent);padding:12px 16px;background:#0d201f;border-radius:5px;margin:20px 0}}
-.table-wrap{{overflow:auto;border:1px solid var(--line);border-radius:12px}}table{{width:100%;border-collapse:collapse;background:var(--panel)}}th,td{{padding:12px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}}th{{color:var(--blue);font-size:12px;text-transform:uppercase;letter-spacing:.08em}}tr:last-child td{{border-bottom:0}}.empty{{color:var(--muted)}}code{{color:var(--accent)}}
-</style></head><body><main>
-<header><div class="eyebrow">Passive-first reconnaissance</div><h1>Cachaza</h1>
-<p>{html_escape(domains)}</p><p class="muted">Generated {html_escape(data['generated_at'])} · version {html_escape(data['version'])}</p>
-<div class="stats">{counts}</div></header>
-<div class="callout"><strong>Scope guard:</strong> {html_escape(data['scope_policy']['note'])}</div>
-<h2>ASN intelligence</h2>{_html_table(['ASN','Holder','Announced','Scope','Sources'], asn_rows)}
-<h2>Network organizations</h2>{_html_table(['Organization','ASN','Sources'], org_rows)}
-<h2>Prefixes</h2>{_html_table(['Prefix','ASN','Scope','Sources'], prefix_rows)}
-<h2>Resolved addresses</h2>{_html_table(['IP','ASN','Sources'], ip_rows)}
-<h2>Network registrations</h2>{_html_table(['Name','Handle','Allocation','Sources'], registration_rows)}
-<h2>Stages</h2>{_html_table(['Stage','Status','Details'], stage_rows)}
-</main></body></html>"""
 
 
 def _pdf_text(value: Any) -> str:
