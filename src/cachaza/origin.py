@@ -965,7 +965,7 @@ class _RedirectRecorder(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-@memoized("public_http", accept=lambda value: 200 <= value.get("status", 0) < 400)
+@memoized("public_http", accept=lambda value: 200 <= (value.get("status") or 0) < 400)
 def _public_http(url: str, *, timeout: float, body_limit: int, maximum_redirects: int) -> dict[str, Any]:
     recorder = _RedirectRecorder()
     opener = urllib.request.build_opener(recorder)
@@ -979,6 +979,7 @@ def _public_http(url: str, *, timeout: float, body_limit: int, maximum_redirects
         method="GET",
     )
     try:
+        count("public_http_requests")
         response = opener.open(request, timeout=timeout)
     except urllib.error.HTTPError as exc:
         response = exc
@@ -1033,6 +1034,7 @@ def _public_http(url: str, *, timeout: float, body_limit: int, maximum_redirects
     }
 
 
+@memoized("baseline", accept=lambda value: bool(value.get("endpoints")) and all(not item.get("error") for item in value["endpoints"]))
 def capture_public_baseline(
     domain: str,
     config: OriginConfig,
@@ -1715,6 +1717,23 @@ class OriginEngine:
     def _validate_candidate(self, candidate: OriginCandidate, root: str, baseline: dict[str, Any], budget: OriginBudget) -> dict[str, Any]:
         started_score = candidate.initial_score
         result: dict[str, Any] = {"ip": candidate.ip, "validated_at": utc_now(), "tcp": {}, "tls": {}, "jarm": "", "http": [], "comparisons": {}, "validation_requests": 0}
+        # Per-candidate successful responses, with exact Host/SNI and probe options.
+        # Budget accounting lives on the miss path, including repeated redirects.
+        responses = {}
+        def request_once(ip, hostname, port, **options):
+            key = (ip, hostname, port, tuple(sorted(options.items())))
+            if key in responses:
+                count("origin_http_cache_hits")
+                return responses[key]
+            budget.consume(action=f"{options['scheme']}_{options['method'].lower()}", candidate_ip=ip)
+            candidate.validation_attempts += 1
+            result["validation_requests"] += 1
+            count("origin_http_requests")
+            response = direct_http_request(ip, hostname, port, **options)
+            if not response.error and response.status not in {408, 425, 429} and response.status < 500:
+                responses[key] = response
+            return response
+
         open_ports: list[int] = []
         validation_ports = list(dict.fromkeys(self.config.validation_ports))
         if self.config.mode == "deep":
@@ -1753,16 +1772,10 @@ class OriginEngine:
         if preferred is not None:
             scheme = "https" if preferred in {443, 8443} else "http"
             if budget.can_consume(candidate.ip):
-                budget.consume(action=f"{scheme}_head", candidate_ip=candidate.ip)
-                candidate.validation_attempts += 1
-                result["validation_requests"] += 1
-                head = direct_http_request(candidate.ip, root, preferred, scheme=scheme, method="HEAD", path="/", connect_timeout=self.config.connect_timeout, total_timeout=self.config.total_timeout, body_limit=0)
+                head = request_once(candidate.ip, root, preferred, scheme=scheme, method="HEAD", path="/", connect_timeout=self.config.connect_timeout, total_timeout=self.config.total_timeout, body_limit=0)
                 result["http"].append(head.to_dict())
             if budget.can_consume(candidate.ip):
-                budget.consume(action=f"{scheme}_get", candidate_ip=candidate.ip)
-                candidate.validation_attempts += 1
-                result["validation_requests"] += 1
-                response = direct_http_request(candidate.ip, root, preferred, scheme=scheme, method="GET", path="/", connect_timeout=self.config.connect_timeout, total_timeout=self.config.total_timeout, body_limit=self.config.maximum_body_bytes)
+                response = request_once(candidate.ip, root, preferred, scheme=scheme, method="GET", path="/", connect_timeout=self.config.connect_timeout, total_timeout=self.config.total_timeout, body_limit=self.config.maximum_body_bytes)
                 result["http"].append(response.to_dict())
                 redirect_chain: list[dict[str, Any]] = []
                 for _ in range(self.config.maximum_redirects):
@@ -1777,10 +1790,7 @@ class OriginEngine:
                     if not budget.can_consume(candidate.ip):
                         break
                     redirect_chain.append({"status": response.status, "location": location})
-                    budget.consume(action=f"{scheme}_get_redirect", candidate_ip=candidate.ip)
-                    candidate.validation_attempts += 1
-                    result["validation_requests"] += 1
-                    response = direct_http_request(
+                    response = request_once(
                         candidate.ip,
                         root,
                         preferred,
@@ -1833,10 +1843,7 @@ class OriginEngine:
             for path in self._paths(baseline)[1:]:
                 if not budget.can_consume(candidate.ip) or candidate.final_score >= self.config.stop_score:
                     break
-                budget.consume(action=f"{scheme}_get", candidate_ip=candidate.ip)
-                candidate.validation_attempts += 1
-                result["validation_requests"] += 1
-                response = direct_http_request(candidate.ip, root, preferred, scheme=scheme, method="GET", path=path, connect_timeout=self.config.connect_timeout, total_timeout=self.config.total_timeout, body_limit=self.config.maximum_body_bytes)
+                response = request_once(candidate.ip, root, preferred, scheme=scheme, method="GET", path=path, connect_timeout=self.config.connect_timeout, total_timeout=self.config.total_timeout, body_limit=self.config.maximum_body_bytes)
                 result["http"].append(response.to_dict())
                 expected = reference.get("resources", {}).get(path, {})
                 if response.body and expected.get("sha256") == _sha256(response.body):

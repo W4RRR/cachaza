@@ -118,3 +118,11 @@ def memoized(category, *, accept=lambda value: bool(value)):
                            lambda: function(*args, **kwargs), accept=accept)
         return wrapped
     return decorate
+
+
+@memoized("dns")
+def resolve_addresses(name):
+    """Share the system resolver's raw successful answers across adapters."""
+    import socket
+    count("dns_requests")
+    return socket.getaddrinfo(name, None, type=socket.SOCK_STREAM)

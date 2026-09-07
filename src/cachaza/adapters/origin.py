@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..run_cache import memoized
+from ..run_cache import resolve_addresses
 
 import base64
 import ipaddress
@@ -66,12 +66,11 @@ def source_family(source: str, metadata: dict[str, Any] | None = None) -> str:
     return clean.replace(" ", "_") or "unknown"
 
 
-@memoized("dns")
 def resolve_host(name: str) -> list[str]:
     """Resolve A/AAAA records without shell execution."""
     values: set[str] = set()
     try:
-        rows = socket.getaddrinfo(name, None, type=socket.SOCK_STREAM)
+        rows = resolve_addresses(name)
     except (socket.gaierror, OSError):
         return []
     for row in rows:

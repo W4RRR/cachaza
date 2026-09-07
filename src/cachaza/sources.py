@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextvars import copy_context
 from .network_policy import MAX_CONCURRENCY
+from .run_cache import resolve_addresses
 
 import ipaddress
 import json
@@ -180,7 +181,7 @@ def intelx_phonebook(
 def resolve_domain_ips(domain: str) -> list[str]:
     """Resolve A/AAAA records with the local resolver and return normalized addresses."""
     values: set[str] = set()
-    for result in socket.getaddrinfo(domain, None, type=socket.SOCK_STREAM):
+    for result in resolve_addresses(domain):
         sockaddr = result[4]
         if not sockaddr:
             continue

@@ -62,3 +62,34 @@ def test_http_identity_errors_and_post_not_cached():
             request_json("https://example.test/bad")
         open_url.return_value.__enter__.return_value.read.return_value = b'[]'
         assert request_json("https://example.test/bad") == []
+
+
+def test_dns_answers_shared_without_changing_adapter_semantics():
+    from cachaza.sources import resolve_domain_ips
+    from cachaza.adapters.origin import resolve_host
+    import socket
+    rows = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+    with RunCache().activate(), patch("socket.getaddrinfo", return_value=rows) as query:
+        assert resolve_domain_ips("example.test") == resolve_host("example.test")
+        assert query.call_count == 1
+
+
+def test_origin_redirect_and_resource_reuse_budget(tmp_path):
+    from test_origin import OriginEngineTests, candidate
+    from cachaza.models import OriginConfig
+    from cachaza.origin import HttpProbeResult, OriginBudget
+    from unittest.mock import MagicMock
+    config = OriginConfig(ports=[80], tls=False, jarm=False, maximum_total_requests=10,
+                          maximum_requests_per_ip=10, paths=["/landing"])
+    engine = OriginEngineTests()._engine(tmp_path, config)
+    item = candidate(score=35)
+    def response(ip, hostname, port, **options):
+        redirect = options["method"] == "GET" and options["path"] == "/"
+        return HttpProbeResult("http", ip, hostname, port, options["path"], options["method"],
+                               status=302 if redirect else 200,
+                               headers={"location": "/landing"} if redirect else {})
+    budget = OriginBudget(config)
+    with patch("cachaza.origin.time.sleep"), patch("cachaza.origin.socket.create_connection", return_value=MagicMock()), patch("cachaza.origin.direct_http_request", side_effect=response) as request:
+        result = engine._validate_candidate(item, "example.com", {"domain": "example.com", "endpoints": []}, budget)
+    assert request.call_count == 3  # HEAD /, GET /, GET /landing (also a resource)
+    assert budget.consumed == result["validation_requests"] == 4  # includes TCP
