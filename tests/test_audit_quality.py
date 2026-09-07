@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -157,3 +158,17 @@ def test_invalid_ttl_rejected_without_workspace(tmp_path, ttl):
     root = tmp_path / "never-created"
     assert main(["run", "-d", "example.com", "-stages", "corporate", "-o", str(root), "-cache-max-age-hours", ttl, "-silent"]) == 2
     assert not root.exists()
+
+
+def test_finalization_reports_completion_on_stderr_and_log(tmp_path, capsys):
+    ws = RunWorkspace(tmp_path)
+    console = Console(color=False)
+    console.attach_log(ws.rest / "execution.log")
+    pipe = Pipeline(TargetSpec(domains=["example.com"]), ws, RunOptions(), console)
+    with patch("cachaza.pipeline.export_reports") as export:
+        pipe.finalize()
+    assert export.called
+    captured = capsys.readouterr()
+    assert "Finalizing run" in captured.err
+    assert "Run finished" in captured.err
+    assert "Run finished" in (ws.rest / "execution.log").read_text(encoding="utf-8")

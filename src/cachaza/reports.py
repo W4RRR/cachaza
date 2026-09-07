@@ -2377,7 +2377,7 @@ def export_reports(
             data["ai_assistance"] = {
                 "status": "error",
                 "provider": "OpenRouter",
-                "language": ai_config.language,
+                "language": "en",
                 "model_requested": ai_config.model,
                 "error": str(exc),
                 "notice": (

@@ -391,6 +391,17 @@ def _validated_narrative(value: Any) -> dict[str, Any]:
     return narrative
 
 
+def _require_english(narrative: dict[str, Any]) -> None:
+    """Reject common Spanish prose leakage without changing original evidence."""
+    text = json.dumps(narrative, ensure_ascii=False).casefold()
+    markers = re.findall(
+        r"\b(?:el|los|las|del|una|para|con|por|que|sin|riesgo|origen|exposición|"
+        r"validada|atribución|propiedad|contener|revalidar|recomendaciones)\b", text
+    )
+    if len(markers) >= 4:
+        raise ValueError("The editorial narrative must be entirely in English")
+
+
 def generate_ai_assistance(
     data: dict[str, Any], config: AIReportConfig
 ) -> dict[str, Any]:
@@ -398,7 +409,7 @@ def generate_ai_assistance(
 
     if not config.api_key.strip():
         raise ValueError("OPENROUTER_API_KEY is required for -ai-report")
-    language = "Spanish" if config.language == "es" else "English"
+    language = "English"
     digest = build_report_digest(data)
     payload = {
         "model": config.model,
@@ -485,6 +496,7 @@ def generate_ai_assistance(
     successful_responses = [response]
     try:
         narrative, response_diagnostic = _response_narrative(response)
+        _require_english(narrative)
     except ValueError as initial_exc:
         initial_diagnostic = _response_diagnostic(response)
         repair_payload = {
@@ -527,6 +539,7 @@ def generate_ai_assistance(
             ) from repair_http_error
         try:
             narrative, response_diagnostic = _response_narrative(repaired_response)
+            _require_english(narrative)
         except ValueError as repair_exc:
             repair_diagnostic = _response_diagnostic(repaired_response)
             raise HttpError(
@@ -550,7 +563,7 @@ def generate_ai_assistance(
     return {
         "status": "generated",
         "provider": "OpenRouter",
-        "language": config.language,
+        "language": "en",
         "model_requested": config.model,
         "model": str(response.get("model") or config.model),
         "structured_output_mode": (
@@ -565,10 +578,7 @@ def generate_ai_assistance(
         "usage": usage_totals,
         "narrative": narrative,
         "notice": (
-            "El texto asistido por IA es únicamente editorial. La evidencia normalizada, "
-            "la puntuación de origen y la trazabilidad determinista siguen siendo la referencia."
-            if config.language == "es"
-            else "AI-assisted prose is editorial only. Cachaza's normalized evidence, "
+            "AI-assisted prose is editorial only. Cachaza's normalized evidence, "
             "origin score, and deterministic attribution trace remain authoritative."
         ),
     }

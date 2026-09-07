@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.1.1 - 2026-09-07
+
+- Collapse URL nodes into host groups; expand 50 URLs at a time, collapse them again, or reveal a URL through graph search. Preserve the complete evidence graph in structured data.
+- Resolve node collisions when changing layout or spacing. Fully hide edges to collapsed or filtered nodes.
+- Generate English AI narrative regardless of legacy language options; retry common Spanish prose leakage and fall back to deterministic reports if validation fails. Original collected evidence is preserved verbatim.
+- Announce report generation and run completion on the progress stream and execution log, including when standard output is redirected.
+
 ## 1.1.0 - 2026-09-06
 
 - Display Origin correlation as a score out of 100, independently of direct validation. Retain legacy JSON probability aliases and add explicit score fields.

@@ -23,7 +23,7 @@ _________     _____  _________   ___ ___    _____  __________  _____
  \______  /\____|__  /\______  /\___|_  /\____|__  /_______ \____|__  /
         \/         \/        \/       \/         \/        \/       \/
                    github.com/W4RRR/cachaza by W4RRR
-                                 v1.1.0
+                                 v1.1.1
 ```
 
 Cachaza turns an explicitly defined domain or network scope into a reproducible reconnaissance workspace. It collects passive intelligence first, applies scope decisions to every observation, and requires explicit authorization before direct-contact stages run.
@@ -580,7 +580,7 @@ cp config/providers.example.env config/providers.env
 chmod 600 config/providers.env
 # Set OPENROUTER_API_KEY in config/providers.env, then:
 cachaza run -d example.com -origin-ip -origin-mode balanced -active -authorized \
-  -format html -format pdf -ai-report -ai-language es \
+  -format html -format pdf -ai-report -ai-language en \
   -ai-model '~openai/gpt-latest' -api-config config/providers.env -o executive-review
 ```
 
@@ -626,7 +626,7 @@ test -f "$HOME/.config/cachaza/providers.env" || \
 chmod 600 "$HOME/.config/cachaza/providers.env"
 # Set OPENROUTER_API_KEY, then:
 cachaza run -d example.com -origin-ip -origin-mode deep -active -authorized \
-  -op -ai-language es -api-config "$HOME/.config/cachaza/providers.env" \
+  -op -ai-language en -api-config "$HOME/.config/cachaza/providers.env" \
   -o professional-example
 ```
 
@@ -672,6 +672,8 @@ cachaza run -d example.com -profile full -active -o example-run -resume
 Changing scope in an existing workspace is rejected to prevent evidence from unrelated engagements being mixed.
 
 ## Audit quality and follow-up (v1.1)
+
+Reports use English for generated headings and editorial narrative, including when a legacy command supplies `-ai-language es`. Collected evidence and operator annotations are preserved verbatim. The graph initially collapses URLs by host. Select a URL group to expand 50 URLs at a time or collapse them again; graph search with Enter can reveal a contained URL. Spacing changes node clearance without resetting your zoom; use Fit to see the whole layout afterward. Finalization and completion messages are written to stderr and the execution log even when stdout is redirected.
 
 Origin is presented as a **correlation score out of 100**, with a separate direct-validation result. Legacy JSON `origin_probability*` fields remain deprecated aliases for compatibility, not statistical probabilities. Direct reachability without an established CDN/WAF boundary calls for an architecture review, not a confirmed bypass.
 
@@ -788,14 +790,14 @@ cachaza -update
 
 Both commands are equivalent.
 
-Once v1.1.0 has been merged into `main` and the `v1.1.0` Release has been published from that same commit, the normal upgrade is:
+Once v1.1.1 has been merged into `main` and the `v1.1.1` Release has been published from that same commit, the normal upgrade is:
 
 ```bash
 cachaza -up
 cachaza -version
 ```
 
-The second command must print `cachaza 1.1.0`.
+The second command must print `cachaza 1.1.1`.
 
 ### Publishing a GitHub Release
 
@@ -806,8 +808,8 @@ Create the tag only after the release pull request has been merged into `main`:
 ```bash
 git switch main
 git pull --ff-only origin main
-git tag -a v1.1.0 -m "Cachaza v1.1.0"
-git push origin v1.1.0
+git tag -a v1.1.1 -m "Cachaza v1.1.1"
+git push origin v1.1.1
 ```
 
 The Release must be public—not a draft or prerelease—so `/releases/latest` and `cachaza -up` can discover it.

@@ -2556,6 +2556,7 @@ class Pipeline:
             raise RuntimeError(f"nmap exited with {result.returncode}: {result.stderr.strip()[:500]}")
 
     def finalize(self) -> None:
+        self.console.info("Finalizing run: generating reports and execution manifest...")
         self.workspace.write_artifact_lists()
         ai_config = None
         if self.options.ai_report:
@@ -2594,4 +2595,7 @@ class Pipeline:
             command_history=self.runner.history,
             dry_run=self.options.dry_run,
             profile=self.options.profile,
+        )
+        self.console.info(
+            f"Run finished with {len(self.failures)} stage failure(s). Reports: {self.workspace.root}"
         )

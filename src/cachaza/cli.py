@@ -321,7 +321,7 @@ its findings. Direct probes must be explicitly authorized with -active.""",
     )
     ai.add_argument(
         "-ai-language", choices=("en", "es"), default="en",
-        help="language for the AI executive narrative: en or es (default: en)",
+        help="reports are always English; es is accepted for legacy command compatibility",
     )
     ai.add_argument(
         "-ai-timeout", type=int, default=60, metavar="SECONDS",
@@ -899,7 +899,7 @@ def command_run(args: argparse.Namespace, console: Console) -> int:
         ai_report=args.ai_report or args.professional_report,
         professional_report=args.professional_report,
         ai_model=args.ai_model,
-        ai_language=args.ai_language,
+        ai_language="en",
         ai_timeout=args.ai_timeout,
         ai_max_tokens=args.ai_max_tokens,
         whois=args.whois,

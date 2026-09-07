@@ -134,7 +134,7 @@ class AIReportingTests(unittest.TestCase):
         self.assertIn('"content_type": "str"', str(caught.exception))
         self.assertNotIn("not json", str(caught.exception))
 
-    def test_markdown_wrapped_spanish_aliases_are_normalized(self) -> None:
+    def test_spanish_narrative_is_rejected_even_with_legacy_language_option(self) -> None:
         narrative = {
             "Título": "Exposición del origen",
             "Resumen ejecutivo": ["Uno.", "Dos.", "Tres."],
@@ -155,13 +155,12 @@ class AIReportingTests(unittest.TestCase):
             ],
         }
         with patch("cachaza.ai_reporting.request_json", return_value=response) as request:
-            result = generate_ai_assistance(
-                self._data(), AIReportConfig(api_key="secret", language="es")
-            )
-        self.assertEqual(request.call_count, 1)
-        self.assertEqual(result["narrative"]["headline"], "Exposición del origen")
-        self.assertEqual(result["narrative"]["recommended_actions"][0], "Contener")
-        self.assertEqual(result["response_diagnostic"]["finish_reason"], "stop")
+            with self.assertRaises(HttpError):
+                generate_ai_assistance(
+                    self._data(), AIReportConfig(api_key="secret", language="es")
+                )
+        self.assertEqual(request.call_count, 2)
+        self.assertIn("English", request.call_args.kwargs["json_body"]["messages"][0]["content"])
 
     def test_segmented_message_content_is_joined_before_decoding(self) -> None:
         narrative = {
