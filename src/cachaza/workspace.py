@@ -251,9 +251,15 @@ class RunWorkspace:
             "api-key-candidates.txt": ("api_key_candidate", None),
             "zone-transfers.txt": ("dns_zone_transfer", None),
         }
-        for filename, (kind, in_scope) in mapping.items():
-            self.write_lines(filename, self.values(kind, in_scope=in_scope))
-        self.write_lines("urls.txt", self.values("url", in_scope=True))
+        # Index once for all lists; preserve the existing sorted/deduplicated bytes.
+        indexed: dict[tuple[str, bool | None], set[str]] = {}
+        for finding in self.findings:
+            indexed.setdefault((finding.kind, finding.in_scope), set()).add(finding.value)
+            indexed.setdefault((finding.kind, None), set()).add(finding.value)
+        ordered = {key: sorted(values) for key, values in indexed.items()}
+        for filename, key in mapping.items():
+            self.write_lines(filename, ordered.get(key, []))
+        self.write_lines("urls.txt", ordered.get(("url", True), []))
         endpoint_values = {
             normalized
             for finding in self.findings
