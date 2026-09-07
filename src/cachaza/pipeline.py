@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from .run_cache import RunCache
+from .scheduler import execute_stages
 
 import ipaddress
 import hashlib
@@ -385,7 +386,7 @@ class Pipeline:
         for name in self.options.stages:
             if name not in stage_map:
                 raise ValidationError(f"unknown stage: {name}")
-            self._run_stage(name, stage_map[name])
+        execute_stages(self, stage_map)
         if self.options.wappalyzer and not self._wappalyzer_executed:
             self._run_stage("wappalyzer", self.stage_wappalyzer)
         if self.options.whois:

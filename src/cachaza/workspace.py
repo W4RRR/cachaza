@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import threading
+from contextlib import contextmanager
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,6 +23,8 @@ def _slug(value: str) -> str:
 class RunWorkspace:
     def __init__(self, root: Path, *, resume: bool = False):
         self.root = root
+        self._lock = threading.RLock()
+        self._local = threading.local()
         self.resume = resume
         self.root.mkdir(parents=True, exist_ok=True)
         self.rest = root / "rest"
@@ -103,6 +107,30 @@ class RunWorkspace:
         return finding.source, finding.kind, finding.value, target
 
     def add(self, finding: Finding) -> bool:
+        with self._lock:
+            buffer = getattr(self._local, "buffer", None)
+            if buffer is not None:
+                findings, seen = buffer
+                key = self._finding_key(finding)
+                if key in seen:
+                    return False
+                seen.add(key)
+                findings.append(finding)
+                return True
+            return self._add_locked(finding)
+
+    @contextmanager
+    def collect_stage(self):
+        """Private findings until the scheduler commits in the requested order."""
+        with self._lock:
+            findings = []
+            self._local.buffer = (findings, set(self._seen))
+        try:
+            yield findings
+        finally:
+            del self._local.buffer
+
+    def _add_locked(self, finding: Finding) -> bool:
         key = self._finding_key(finding)
         if key in self._seen:
             return False
