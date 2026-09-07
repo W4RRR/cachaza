@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 1.2.0 - 2026-09-07
+
+- Run proven-independent passive stages concurrently with ordered finding commits; retain sequential resume/strict execution and the existing network limits.
+- Add a bounded per-run success cache for identical provider requests, shared system DNS answers and public baseline operations. Deduplicate repeated Origin HTTP probes without spending budget on cache hits.
+- Add optional `CACHAZA_METRICS=1` execution metrics and `CACHAZA_CACHE=0` comparison mode without changing CLI flags or checkpoint identity.
+- Replace quadratic graph force scans with exact spatial neighbor indexing, prevent visible node collisions, cache settled layouts and place kind clusters in separate regions. Preserve expandable URL groups, Origin highlighting, English narrative and the final terminal mini-summary.
+- Share report presentation helpers, remove the unused HTML renderer and index artifact lists once. Keep report data contracts, scoring, CSP and runtime dependencies unchanged.
+- Add offline runtime/layout benchmarks and a pre-optimization normalized report snapshot; see `tests/OPTIMIZATION_RESULTS.md` for measured results and limitations.
+
 ## 1.1.2 - 2026-09-07
 
 - Keep the final report paths, key findings, provider issues, Origin summary and recommended next step visible in the terminal when standard output is redirected, while retaining the same summary in redirected output and the execution log.
