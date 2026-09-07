@@ -1721,11 +1721,12 @@ class OriginEngine:
         # Budget accounting lives on the miss path, including repeated redirects.
         responses = {}
         def request_once(ip, hostname, port, **options):
+            action = options.pop("_action", f"{options['scheme']}_{options['method'].lower()}")
             key = (ip, hostname, port, tuple(sorted(options.items())))
             if key in responses:
                 count("origin_http_cache_hits")
                 return responses[key]
-            budget.consume(action=f"{options['scheme']}_{options['method'].lower()}", candidate_ip=ip)
+            budget.consume(action=action, candidate_ip=ip)
             candidate.validation_attempts += 1
             result["validation_requests"] += 1
             count("origin_http_requests")
@@ -1797,6 +1798,7 @@ class OriginEngine:
                         scheme=scheme,
                         method="GET",
                         path=parsed.path or "/",
+                        _action=f"{scheme}_get_redirect",
                         connect_timeout=self.config.connect_timeout,
                         total_timeout=self.config.total_timeout,
                         body_limit=self.config.maximum_body_bytes,
