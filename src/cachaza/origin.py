@@ -1034,7 +1034,7 @@ def _public_http(url: str, *, timeout: float, body_limit: int, maximum_redirects
     }
 
 
-@memoized("baseline", accept=lambda value: bool(value.get("endpoints")) and all(not item.get("error") for item in value["endpoints"]))
+@memoized("baseline", accept=lambda value: bool(value.get("endpoints")) and all(not item.get("error") and 200 <= (item.get("status") or 0) < 400 for item in value["endpoints"]))
 def capture_public_baseline(
     domain: str,
     config: OriginConfig,
