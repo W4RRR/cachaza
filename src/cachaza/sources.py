@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from contextvars import copy_context
+from .network_policy import MAX_CONCURRENCY
+
 import ipaddress
 import json
 import os
@@ -695,10 +698,10 @@ def fetch_cloud_ranges(
 
     ranges: dict[str, list[ipaddress._BaseNetwork]] = {item: [] for item in normalized}
     errors: dict[str, str] = {}
-    with ThreadPoolExecutor(max_workers=max(1, min(jobs, 2))) as executor:
+    with ThreadPoolExecutor(max_workers=max(1, min(jobs, MAX_CONCURRENCY))) as executor:
         futures = {
             executor.submit(
-                _fetch_cloud_family, provider, family, timeout=timeout, retries=retries
+                copy_context().run, _fetch_cloud_family, provider, family, timeout=timeout, retries=retries
             ): (provider, family)
             for provider in normalized
             for family in (4, 6)

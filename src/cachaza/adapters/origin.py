@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..run_cache import memoized
+
 import base64
 import ipaddress
 import json
@@ -64,6 +66,7 @@ def source_family(source: str, metadata: dict[str, Any] | None = None) -> str:
     return clean.replace(" ", "_") or "unknown"
 
 
+@memoized("dns")
 def resolve_host(name: str) -> list[str]:
     """Resolve A/AAAA records without shell execution."""
     values: set[str] = set()

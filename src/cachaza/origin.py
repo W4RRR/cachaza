@@ -8,6 +8,8 @@ or vulnerability scanning.
 
 from __future__ import annotations
 
+from .run_cache import memoized, count
+
 import csv
 import hashlib
 import http.client
@@ -398,6 +400,7 @@ def dns_inventory(domain: str, *, maximum_queries: int = 100) -> dict[str, Any]:
     return {"records": records, "resolver": "dnspython", "queries": queries, "spf_depth_limit": 5}
 
 
+@memoized("cname")
 def resolve_cname(name: str) -> str:
     """Return the first CNAME without invoking a shell or following arbitrary data."""
     try:
@@ -962,6 +965,7 @@ class _RedirectRecorder(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
+@memoized("public_http", accept=lambda value: 200 <= value.get("status", 0) < 400)
 def _public_http(url: str, *, timeout: float, body_limit: int, maximum_redirects: int) -> dict[str, Any]:
     recorder = _RedirectRecorder()
     opener = urllib.request.build_opener(recorder)

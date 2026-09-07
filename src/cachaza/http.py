@@ -7,6 +7,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from .run_cache import memoized, count, CURRENT_RUN
 from . import __version__
 from .network_policy import GLOBAL_REQUEST_LIMITER
 
@@ -27,6 +28,7 @@ class HttpError(RuntimeError):
 USER_AGENT = f"cachaza/{__version__} (+authorized-security-research)"
 
 
+@memoized("http", accept=lambda value: isinstance(value, bytes) and len(value) <= 1048576)
 def request_bytes(
     url: str,
     *,
@@ -54,6 +56,7 @@ def request_bytes(
     for attempt in range(retries + 1):
         try:
             with GLOBAL_REQUEST_LIMITER.slot():
+                count("http_requests")
                 with urllib.request.urlopen(request, timeout=timeout) as response:
                     return response.read()
         except urllib.error.HTTPError as exc:
@@ -119,4 +122,6 @@ def request_json(
     try:
         return json.loads(payload.decode("utf-8", errors="replace"))
     except json.JSONDecodeError as exc:
+        if CURRENT_RUN.get() is not None:
+            CURRENT_RUN.get().discard("http")
         raise HttpError(f"invalid JSON response from {url.split('?', 1)[0]}") from exc

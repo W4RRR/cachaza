@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import time
+from .run_cache import RunCache
+
 import ipaddress
 import hashlib
 import json
@@ -273,6 +276,14 @@ class Pipeline:
         return added
 
     def _run_stage(self, name: str, function: Callable[[], str | None]) -> None:
+        started = time.perf_counter()
+        try:
+            self._run_stage_impl(name, function)
+        finally:
+            if hasattr(self, "run_cache"):
+                self.run_cache.stage_seconds[name] = time.perf_counter() - started
+
+    def _run_stage_impl(self, name: str, function: Callable[[], str | None]) -> None:
         cache_key = self._stage_cache_key(name)
         ttl = self.options.cache_max_age_hours if self.options.cache_max_age_hours is not None else STAGE_TTL_HOURS.get(name, 24)
         if self.workspace.resume and not self._refresh_downstream and name not in self.options.refresh_stages and self.workspace.checkpoint_matches(name, cache_key, ttl):
@@ -289,7 +300,7 @@ class Pipeline:
             self.workspace.stages.append(status)
             self.console.info(f"Stage: {name} (cached)")
             return
-        previous = list(self.workspace.findings)
+        previous = list(self.workspace.findings) if self.workspace.resume else []
         if self.workspace.resume and not self.options.dry_run:
             if not self._refresh_downstream:
                 reused = {stage.name for stage in self.workspace.stages if stage.status == "cached"}
@@ -334,6 +345,17 @@ class Pipeline:
             status.finished_at = utc_now()
 
     def execute(self) -> Path:
+        self.run_cache = RunCache(enabled=os.environ.get("CACHAZA_CACHE", "1") != "0")
+        with self.run_cache.activate():
+            try:
+                return self._execute()
+            finally:
+                if os.environ.get("CACHAZA_METRICS") == "1":
+                    metrics = self.run_cache.snapshot()
+                    metrics["subprocesses"] = sum(not item.get("skipped", False) for item in self.runner.history)
+                    self.workspace.write_json("metrics.json", metrics)
+
+    def _execute(self) -> Path:
         stage_map: dict[str, Callable[[], str | None]] = {
             "corporate": self.stage_corporate,
             "asn": self.stage_asn,
